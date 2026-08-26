@@ -5,7 +5,13 @@ Claude Code sessions and writes pi sessions.
 
 ```
 cd your-project
-npx harnext
+npx @buildingthefuture/harnext
+```
+
+Installed globally, the command is `harnext`:
+
+```
+npm i -g @buildingthefuture/harnext
 ```
 
 That takes the newest Claude Code session recorded for the directory, writes it
@@ -110,7 +116,7 @@ when the point is to carry the state of the work across, not the whole record.
 ## As a library
 
 ```ts
-import { readClaudeSessionFile, resolveClaudeSession, writeToPi } from "harnext";
+import { readClaudeSessionFile, resolveClaudeSession, writeToPi } from "@buildingthefuture/harnext";
 
 const source = await resolveClaudeSession(process.cwd());
 const transcript = await readClaudeSessionFile(source.path);

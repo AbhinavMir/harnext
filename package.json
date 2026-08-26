@@ -1,5 +1,5 @@
 {
-  "name": "harnext",
+  "name": "@buildingthefuture/harnext",
   "version": "0.1.0",
   "description": "Move a coding-agent chat history from one harness to another. Ships Claude Code to pi.",
   "license": "MIT",
@@ -53,5 +53,8 @@
     "@earendil-works/pi-coding-agent": {
       "optional": true
     }
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }
