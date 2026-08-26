@@ -3,6 +3,14 @@
   "version": "0.1.0",
   "description": "Move a coding-agent chat history from one harness to another. Ships Claude Code to pi.",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/AbhinavMir/harnext.git"
+  },
+  "bugs": {
+    "url": "https://github.com/AbhinavMir/harnext/issues"
+  },
+  "homepage": "https://github.com/AbhinavMir/harnext#readme",
   "type": "module",
   "bin": {
     "harnext": "dist/cli.js"
