@@ -1,7 +1,7 @@
 {
   "name": "@buildingthefuture/harnext",
-  "version": "0.2.0",
-  "description": "Move coding-agent chat history between Claude Code and pi.",
+  "version": "0.3.0",
+  "description": "Move and publish coding-agent chat history from Claude Code and pi.",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -44,9 +44,13 @@
     "coding-agent",
     "session",
     "transcript",
-    "migration"
+    "migration",
+    "prompt-export",
+    "openrouter"
   ],
-  "dependencies": {},
+  "dependencies": {
+    "obscenity": "^0.4.6"
+  },
   "devDependencies": {
     "@earendil-works/pi-ai": "^0.84.3",
     "@earendil-works/pi-coding-agent": "^0.84.3",

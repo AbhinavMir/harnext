@@ -5,7 +5,16 @@ import { readFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { digestTranscript } from "./digest.js";
+import { postToHypertext, type HypertextExpiry } from "./hypertext.js";
 import type { Transcript } from "./ir.js";
+import {
+	buildPromptExport,
+	renderPromptExport,
+	splitPromptExportForHtml,
+	type ExportFormat,
+	type ExportMode,
+	writePromptExport,
+} from "./prompt-export.js";
 import { findClaudeSessions, readClaudeSessionFile, resolveClaudeSession } from "./readers/claude-code.js";
 import { findPiSessions, readPiSessionFile, resolvePiSession } from "./readers/pi.js";
 import {
@@ -16,9 +25,22 @@ import {
 import { DEFAULT_MAX_TOOL_OUTPUT_CHARS, toPiEntries, writeToPi } from "./writers/pi.js";
 
 type Direction = "claude-to-pi" | "pi-to-claude";
+type Operation = "transfer" | "export";
+type ExportSource = "claude" | "pi";
 
 interface Options {
+	operation: Operation;
 	direction: Direction;
+	exportSource: ExportSource;
+	exportMode: ExportMode;
+	exportFormat: ExportFormat;
+	output?: string;
+	redact: boolean;
+	smartModel?: string;
+	postHypertext: boolean;
+	hypertextExpires?: HypertextExpiry;
+	hypertextMaxViews?: number;
+	hypertextPassword?: string;
 	cwd: string;
 	session?: string;
 	digest: boolean;
@@ -41,8 +63,21 @@ Usage:
   harnext [claude-to-pi] [options]  Import Claude Code's newest session into pi (default)
   harnext pi-to-claude [options]    Import pi's newest session into Claude Code
   harnext <direction> --list        Show source sessions recorded for this directory
+  harnext export [options]          Export user prompt history
 
-Options:
+Export options:
+  --from <claude|pi>             Source harness (default: claude)
+  --mode <raw|smart>             Exact prompts or OpenRouter-cleaned replacements (default: raw)
+  --format <html|markdown|text>   Output format (default: markdown)
+  --output <path|->              Output path, or - for stdout
+  --redact <on|off>              Local profanity/slur redaction (default: on)
+  --smart-model <model>          OpenRouter model id; smart mode also needs OPENROUTER_API_KEY
+  --post hypertext               Publish an HTML rendering to hypertext.one
+  --expires <1h|1d|7d|30d|60d|90d>  hypertext.one lifetime (default: 30d)
+  --max-views <number>           Optional hypertext.one view limit
+  --password <value>             Optional hypertext.one reader password
+
+Shared options:
   --session <path|id>            Source session file, or a full or partial session id
   --cwd <dir>                    Project directory (default: the current directory)
   --digest                       Import one summary message instead of the full transcript
@@ -60,7 +95,13 @@ Options:
 
 function parseArgs(argv: string[]): Options {
 	const options: Options = {
+		operation: "transfer",
 		direction: "claude-to-pi",
+		exportSource: "claude",
+		exportMode: "raw",
+		exportFormat: "markdown",
+		redact: true,
+		postHypertext: false,
 		cwd: process.cwd(),
 		digest: false,
 		keepReminders: false,
@@ -74,7 +115,10 @@ function parseArgs(argv: string[]): Options {
 
 	let start = 0;
 	const command = argv[0];
-	if (command === "claude-to-pi" || command === "to-pi") {
+	if (command === "export") {
+		options.operation = "export";
+		start = 1;
+	} else if (command === "claude-to-pi" || command === "to-pi") {
 		options.direction = "claude-to-pi";
 		start = 1;
 	} else if (command === "pi-to-claude" || command === "to-claude") {
@@ -91,6 +135,51 @@ function parseArgs(argv: string[]): Options {
 			return value;
 		};
 		switch (arg) {
+			case "--from": {
+				const value = next();
+				if (value !== "claude" && value !== "pi") throw new Error("--from must be claude or pi");
+				options.exportSource = value;
+				break;
+			}
+			case "--mode": {
+				const value = next();
+				if (value !== "raw" && value !== "smart") throw new Error("--mode must be raw or smart");
+				options.exportMode = value;
+				break;
+			}
+			case "--format": {
+				const value = next();
+				if (value !== "html" && value !== "markdown" && value !== "text") throw new Error("--format must be html, markdown, or text");
+				options.exportFormat = value;
+				break;
+			}
+			case "--output": options.output = next(); break;
+			case "--redact": {
+				const value = next();
+				if (value !== "on" && value !== "off") throw new Error("--redact must be on or off");
+				options.redact = value === "on";
+				break;
+			}
+			case "--smart-model": options.smartModel = next(); break;
+			case "--post": {
+				const value = next();
+				if (value !== "hypertext") throw new Error("--post currently supports only hypertext");
+				options.postHypertext = true;
+				break;
+			}
+			case "--expires": {
+				const value = next();
+				if (!["1h", "1d", "7d", "30d", "60d", "90d"].includes(value)) throw new Error("invalid --expires value");
+				options.hypertextExpires = value as HypertextExpiry;
+				break;
+			}
+			case "--max-views": {
+				const value = Number.parseInt(next(), 10);
+				if (!Number.isSafeInteger(value) || value <= 0) throw new Error("--max-views must be a positive integer");
+				options.hypertextMaxViews = value;
+				break;
+			}
+			case "--password": options.hypertextPassword = next(); break;
 			case "--session": options.session = next(); break;
 			case "--cwd": options.cwd = resolve(next()); break;
 			case "--digest": options.digest = true; break;
@@ -169,10 +258,66 @@ async function listSource(options: Options): Promise<void> {
 	}
 }
 
+function exportExtension(format: ExportFormat): string {
+	return format === "markdown" ? "md" : format === "text" ? "txt" : "html";
+}
+
+async function runExport(options: Options): Promise<number> {
+	if (options.list) {
+		const sessions = options.exportSource === "claude"
+			? await findClaudeSessions(options.cwd, options.projectsRoot)
+			: await findPiSessions(options.cwd, options.sessionsRoot);
+		if (sessions.length === 0) {
+			process.stdout.write(`No ${options.exportSource === "claude" ? "Claude Code" : "pi"} sessions recorded for ${options.cwd}\n`);
+			return 0;
+		}
+		for (const session of sessions) {
+			const when = new Date(session.modifiedAt).toISOString().replace("T", " ").slice(0, 16);
+			process.stdout.write(`${session.sessionId.slice(0, 8)}  ${when}  ${session.title ?? session.firstPrompt ?? ""}\n`);
+		}
+		return 0;
+	}
+	const source = options.exportSource === "claude"
+		? await resolveClaudeSession(options.cwd, options.session, options.projectsRoot)
+		: await resolvePiSession(options.cwd, options.session, options.sessionsRoot);
+	const transcript = options.exportSource === "claude"
+		? await readClaudeSessionFile(source.path, { keepSystemReminders: options.keepReminders })
+		: await readPiSessionFile(source.path);
+	const record = await buildPromptExport(transcript, {
+		mode: options.exportMode,
+		redact: options.redact,
+		...(options.exportMode === "smart" ? { smart: { model: options.smartModel } } : {}),
+	});
+	const content = renderPromptExport(record, options.exportFormat);
+	const output = options.output ?? resolve(options.cwd, `prompt-history-${record.sourceSessionId.slice(0, 8)}.${exportExtension(options.exportFormat)}`);
+	if (output === "-") process.stdout.write(content);
+	else {
+		await writePromptExport(resolve(output), content);
+		process.stdout.write(`${source.path}\n  -> ${resolve(output)}\n`);
+	}
+	process.stderr.write(`${record.prompts.length} prompts exported (${record.mode}, redaction ${record.redacted ? "on" : "off"}, ${record.redactionMatches} matches)\n`);
+
+	if (options.postHypertext) {
+		const pages = splitPromptExportForHtml(record);
+		for (const [offset, page] of pages.entries()) {
+			const suffix = pages.length === 1 ? "" : ` · part ${offset + 1}/${pages.length}`;
+			const posted = await postToHypertext(renderPromptExport(page, "html"), {
+				title: `${options.name ?? `Prompt history · ${record.source}`}${suffix}`,
+				...(options.hypertextExpires === undefined ? {} : { expires: options.hypertextExpires }),
+				...(options.hypertextMaxViews === undefined ? {} : { maxViews: options.hypertextMaxViews }),
+				...(options.hypertextPassword === undefined ? {} : { password: options.hypertextPassword }),
+			});
+			process.stderr.write(`Published${suffix}: ${posted.url}\nOwner token (shown once; needed to edit/delete): ${posted.ownerToken}\n`);
+		}
+	}
+	return 0;
+}
+
 async function run(argv: string[]): Promise<number> {
 	const options = parseArgs(argv);
 	if (options.help) { process.stdout.write(USAGE); return 0; }
 	if (options.version) { process.stdout.write(`${await version()}\n`); return 0; }
+	if (options.operation === "export") return runExport(options);
 	if (options.list) { await listSource(options); return 0; }
 
 	if (options.direction === "claude-to-pi") {

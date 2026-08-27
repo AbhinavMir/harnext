@@ -14,6 +14,25 @@ export type {
 } from "./ir.js";
 export { Notes, textOf } from "./ir.js";
 export { digestText, digestTranscript } from "./digest.js";
+export { redactText, type RedactionResult } from "./redaction.js";
+export { cleanPrompts, type SmartOptions } from "./smart.js";
+export {
+	buildPromptExport,
+	type BuildPromptExportOptions,
+	type ExportFormat,
+	type ExportMode,
+	type PromptEntry,
+	type PromptExport,
+	renderPromptExport,
+	splitPromptExportForHtml,
+	writePromptExport,
+} from "./prompt-export.js";
+export {
+	type HypertextExpiry,
+	type HypertextOptions,
+	type HypertextResult,
+	postToHypertext,
+} from "./hypertext.js";
 export { mappedToolNames, mapPiTool, mapTool, type MappedTool } from "./tools.js";
 export {
 	type ClaudeReadOptions,

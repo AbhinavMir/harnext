@@ -47,6 +47,60 @@ the harness where you send them. Run harnext again to move a newer snapshot.
 Files need no synchronization because both harnesses work in the same project
 directory.
 
+## Export prompt history
+
+Export user prompts only; assistant messages, tool traffic, and images are
+ignored:
+
+```
+harnext export --from claude --mode raw --format markdown
+harnext export --from pi --mode raw --format html --output prompts.html
+harnext export --from pi --mode raw --format text --redact off
+```
+
+Raw mode preserves each harness prompt exactly. Local redaction is on by
+default and replaces matches with `[redacted]`. It uses Obscenity's English
+dataset and covers broader profanity as well as identity slurs. Like every
+word filter, it is heuristic rather than a guarantee. No prompt text is sent
+to a moderation service. Use `--redact off` only when the destination
+may safely contain the original text.
+
+Smart mode replaces every prompt with a concise cleaned version. It does not
+include the original alongside it. Smart export uses OpenRouter so one API key
+can select models from multiple providers:
+
+```
+export OPENROUTER_API_KEY=...
+harnext export --from pi --mode smart \
+  --smart-model anthropic/claude-haiku-4.5 \
+  --format markdown
+```
+
+`OPENROUTER_MODEL` can supply the model instead of `--smart-model`. harnext
+requests strict structured output and tells OpenRouter to route only to
+endpoints that support it. The selected model receives the prompt text; raw
+mode stays entirely local.
+
+Publish an HTML rendering to hypertext.one only when explicitly requested:
+
+```
+harnext export --from claude --mode smart \
+  --smart-model anthropic/claude-haiku-4.5 \
+  --format html --post hypertext --expires 7d
+```
+
+hypertext.one pages are readable by anyone with the URL unless `--password` is
+set. The service has no accounts or API keys, defaults to 30-day expiry, and
+returns an owner token once for editing or deletion. harnext prints that token
+but does not store it. Exports over the service's 100KB page limit are split
+into ordered pages automatically.
+
+Formats are `html`, `markdown`, and `text`. Use `--output -` for stdout or
+`--output <path>` to choose a file. Otherwise harnext writes
+`prompt-history-<session>.{html,md,txt}` in the project directory. Select a
+specific source session with the same `--session <path|id>` option used by
+transfers.
+
 ## Inspect before importing
 
 ```
@@ -80,6 +134,9 @@ harnext claude-to-pi --session 278e6bb8
 | `--projects-root <dir>` | Claude Code projects root, as source or target. |
 | `--keep-reminders` | Claude → pi only: retain Claude `<system-reminder>` blocks. |
 | `--pi-package <dir>` | Claude → pi only: write with this pi package. |
+
+Export-only options are documented under “Export prompt history”; run
+`harnext export --help` for the complete flag list.
 
 If `npx @buildingthefuture/harnext` reports `harnext: command not found`, use:
 
