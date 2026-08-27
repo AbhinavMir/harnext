@@ -6,6 +6,12 @@ Move coding-agent chat history between Claude Code and pi.
 npm i -g @buildingthefuture/harnext
 ```
 
+## Demo
+
+![harnext transfer and export CLI](https://raw.githubusercontent.com/AbhinavMir/harnext/main/docs/screenshots/cli-demo.png)
+
+![harnext HTML prompt-history export](https://raw.githubusercontent.com/AbhinavMir/harnext/main/docs/screenshots/prompt-export.png)
+
 ## Claude Code → pi
 
 From the project whose conversation you want to move:
