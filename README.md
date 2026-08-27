@@ -38,6 +38,16 @@ versioned: a file written by a different release is refused with "Session file
 is not a valid pi session". Point harnext at a specific pi with `--pi-package`
 or the `HARNEXT_PI_PACKAGE` environment variable.
 
+The Node version is the one that trips people up. pi's own code does not parse
+on Node 18, so harnext cannot load it there and says so, naming the version it
+is running on. Check with `node --version` before reaching for anything else.
+
+If `npx` reports `harnext: command not found`, name the binary explicitly:
+
+```
+npx --package @buildingthefuture/harnext harnext
+```
+
 ## Commands
 
 ```

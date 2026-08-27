@@ -58,13 +58,44 @@ interface PiModule {
 	getDefaultSessionDir?: (cwd: string, agentDir?: string) => string;
 }
 
+/** One pi package harnext looked at, and why it could not be used. */
+export interface PiLoadFailure {
+	root: string;
+	reason: string;
+}
+
+export const MINIMUM_PI_NODE = "22.19.0";
+
+function runningNodeIsTooOld(): boolean {
+	const [major = 0, minor = 0] = process.versions.node.split(".").map((part) => Number.parseInt(part, 10));
+	return major < 22 || (major === 22 && minor < 19);
+}
+
 export class PiNotFoundError extends Error {
-	constructor() {
-		super(
-			"No pi installation found. Install pi with `npm i -g @earendil-works/pi-coding-agent`, " +
-				"or point harnext at one with --pi-package <dir> or HARNEXT_PI_PACKAGE.",
-		);
+	readonly failures: PiLoadFailure[];
+
+	constructor(failures: PiLoadFailure[]) {
+		const lines: string[] = [];
+		if (failures.length === 0) {
+			lines.push("No pi installation found.");
+		} else {
+			lines.push("Found pi, but could not load its session code:");
+			for (const failure of failures) lines.push(`  ${failure.root}: ${failure.reason}`);
+		}
+		if (runningNodeIsTooOld()) {
+			lines.push(
+				`This is Node ${process.versions.node}. pi needs Node ${MINIMUM_PI_NODE} or later, ` +
+					"so run harnext on that version too.",
+			);
+		} else {
+			lines.push(
+				"Install pi with `npm i -g @earendil-works/pi-coding-agent`, " +
+					"or point harnext at one with --pi-package <dir> or HARNEXT_PI_PACKAGE.",
+			);
+		}
+		super(lines.join("\n"));
 		this.name = "PiNotFoundError";
+		this.failures = failures;
 	}
 }
 
@@ -131,17 +162,23 @@ async function candidateRoots(): Promise<string[]> {
 	return roots;
 }
 
-async function loadFrom(root: string): Promise<PiSessionApi | undefined> {
+async function loadFrom(root: string, failures: PiLoadFailure[]): Promise<PiSessionApi | undefined> {
 	const entry = join(root, "dist", "index.js");
 	if (!(await exists(entry))) return undefined;
 	let module: PiModule;
 	try {
 		module = (await import(pathToFileURL(entry).href)) as PiModule;
-	} catch {
+	} catch (error) {
+		// An unreadable pi is a different problem from a missing pi, and the
+		// usual cause is a Node too old for pi's own code. Keep the reason.
+		failures.push({ root, reason: error instanceof Error ? error.message : String(error) });
 		return undefined;
 	}
 	const manager = module.SessionManager;
-	if (manager === undefined || typeof manager.inMemory !== "function") return undefined;
+	if (manager === undefined || typeof manager.inMemory !== "function") {
+		failures.push({ root, reason: "the package exports no usable SessionManager" });
+		return undefined;
+	}
 	// `getDefaultSessionDir` is not part of every release's public surface, so
 	// the fallback repeats pi's own rule for naming a session directory.
 	const defaultDir = module.getDefaultSessionDir;
@@ -161,22 +198,27 @@ async function loadFrom(root: string): Promise<PiSessionApi | undefined> {
  * skips the search.
  */
 export async function loadPiSessionApi(options: { override?: string } = {}): Promise<PiSessionApi> {
+	const failures: PiLoadFailure[] = [];
+
 	if (options.override !== undefined) {
-		const loaded = await loadFrom(options.override);
-		if (loaded === undefined) throw new Error(`No @earendil-works/pi-coding-agent package at ${options.override}`);
-		return loaded;
+		const loaded = await loadFrom(options.override, failures);
+		if (loaded !== undefined) return loaded;
+		throw new PiNotFoundError(failures);
 	}
 
 	const fromEnv = process.env.HARNEXT_PI_PACKAGE;
 	if (fromEnv !== undefined && fromEnv !== "") {
-		const loaded = await loadFrom(fromEnv);
+		const loaded = await loadFrom(fromEnv, failures);
 		if (loaded !== undefined) return loaded;
 	}
+	const seen = new Set<string>();
 	for (const root of await candidateRoots()) {
-		const loaded = await loadFrom(root);
+		if (seen.has(root)) continue;
+		seen.add(root);
+		const loaded = await loadFrom(root, failures);
 		if (loaded !== undefined) return loaded;
 	}
-	throw new PiNotFoundError();
+	throw new PiNotFoundError(failures);
 }
 
 /** pi's own agent directory, honouring the environment variable pi reads. */

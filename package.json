@@ -1,6 +1,6 @@
 {
   "name": "@buildingthefuture/harnext",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Move a coding-agent chat history from one harness to another. Ships Claude Code to pi.",
   "license": "MIT",
   "repository": {
