@@ -1,7 +1,7 @@
 {
   "name": "@buildingthefuture/harnext",
-  "version": "0.1.1",
-  "description": "Move a coding-agent chat history from one harness to another. Ships Claude Code to pi.",
+  "version": "0.2.0",
+  "description": "Move coding-agent chat history between Claude Code and pi.",
   "license": "MIT",
   "repository": {
     "type": "git",

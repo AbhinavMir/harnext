@@ -1,162 +1,167 @@
 # harnext
 
-Move a coding-agent chat history from one harness to another. Version 0.1 reads
-Claude Code sessions and writes pi sessions.
-
-```
-cd your-project
-npx @buildingthefuture/harnext
-```
-
-Installed globally, the command is `harnext`:
+Move coding-agent chat history between Claude Code and pi.
 
 ```
 npm i -g @buildingthefuture/harnext
 ```
 
-That takes the newest Claude Code session recorded for the directory, writes it
-into pi's session store, and prints the command that resumes it:
+## Claude Code → pi
+
+From the project whose conversation you want to move:
 
 ```
-/Users/you/.claude/projects/-Users-you-project/8f21….jsonl
-  -> /Users/you/.pi/agent/sessions/--Users-you-project--/2026-08-26T22-31-58-253Z_01a04033….jsonl
-  261 messages, 126 tool calls mapped, 2 degraded to text
-  141 harness records kept as pi custom entries
-  written by pi 0.84.2 at /Users/you/.local/lib/node_modules/@earendil-works/pi-coding-agent
-
-Resume it:
-  cd /Users/you/project && pi --session 01a04033
+cd your-project
+harnext
 ```
 
-pi then opens the conversation with its full history and you keep working.
-
-## Requirements
-
-Node 22.19 or later, and an installed pi. harnext writes the session file with
-the session code from your own pi installation, because pi's session format is
-versioned: a file written by a different release is refused with "Session file
-is not a valid pi session". Point harnext at a specific pi with `--pi-package`
-or the `HARNEXT_PI_PACKAGE` environment variable.
-
-The Node version is the one that trips people up. pi's own code does not parse
-on Node 18, so harnext cannot load it there and says so, naming the version it
-is running on. Check with `node --version` before reaching for anything else.
-
-If `npx` reports `harnext: command not found`, name the binary explicitly:
+`claude-to-pi` is the default direction. The explicit form is:
 
 ```
-npx --package @buildingthefuture/harnext harnext
+harnext claude-to-pi
 ```
 
-## Commands
+harnext reads the newest Claude Code session for the directory, writes a new pi
+session, and prints the exact resume command:
 
 ```
-harnext                    Import the newest Claude Code session for this directory
-harnext --list             Show the Claude Code sessions recorded for this directory
-harnext --session 8f21     Import one session by id, id prefix, or file path
-harnext --digest           Import a summary instead of the full transcript
-harnext --dry-run          Report what the import contains and write nothing
+pi --session 01a04033
 ```
+
+## pi → Claude Code
+
+```
+cd your-project
+harnext pi-to-claude
+```
+
+harnext reads the newest pi session for the directory, writes a new Claude Code
+session, and prints:
+
+```
+claude --resume 2db50c18-c116-4f54-a65e-e14d86d9f599
+```
+
+These are snapshot imports, not live synchronization. Further messages stay in
+the harness where you send them. Run harnext again to move a newer snapshot.
+Files need no synchronization because both harnesses work in the same project
+directory.
+
+## Inspect before importing
+
+```
+harnext claude-to-pi --list
+harnext pi-to-claude --list
+
+harnext claude-to-pi --dry-run
+harnext pi-to-claude --dry-run
+```
+
+Select a source by full/partial id or file path:
+
+```
+harnext pi-to-claude --session 01a04033
+harnext claude-to-pi --session 278e6bb8
+```
+
+## Options
 
 | Option | Effect |
 | --- | --- |
 | `--cwd <dir>` | Project directory. Default: the current directory. |
-| `--name <name>` | Display name for the new pi session. |
-| `--max-tool-output <chars>` | Cap on one tool result. Default 10000. `0` disables the cap. |
-| `--keep-reminders` | Keep Claude's `<system-reminder>` blocks. |
-| `--preserve-tools` | Keep tool calls pi does not have. See below. |
-| `--sessions-root <dir>` | pi session store. Default: pi's own. |
-| `--projects-root <dir>` | Claude Code project store. Default: `~/.claude/projects`. |
-| `--pi-package <dir>` | The `@earendil-works/pi-coding-agent` package to write with. |
+| `--session <path|id>` | Source session path, id, or unambiguous id prefix. |
+| `--list` | List sessions from the source harness. |
+| `--dry-run` | Report the conversion and write nothing. |
+| `--digest` | Import one deterministic summary instead of the full transcript. |
+| `--name <name>` | Display name/title for the imported session. |
+| `--max-tool-output <chars>` | Cap one result. Default 10000; `0` disables. |
+| `--preserve-tools` | Preserve unknown calls instead of degrading them to text. This can break resume. |
+| `--sessions-root <dir>` | pi sessions root, as source or target. |
+| `--projects-root <dir>` | Claude Code projects root, as source or target. |
+| `--keep-reminders` | Claude → pi only: retain Claude `<system-reminder>` blocks. |
+| `--pi-package <dir>` | Claude → pi only: write with this pi package. |
 
-## What happens to the transcript
+If `npx @buildingthefuture/harnext` reports `harnext: command not found`, use:
 
-**Only the live branch is imported.** A Claude Code session is a tree, not a
-list: a rewind starts a new branch and keeps the old one. harnext walks back
-from the leaf the session ended on, so abandoned branches drop out. The report
-counts them.
+```
+npx --package @buildingthefuture/harnext harnext pi-to-claude
+```
 
-**Tools are translated.** A tool call that names a tool the target does not have
-is worse than no call at all, because the provider rejects the whole history on
-the first resumed turn.
+## What survives
 
-| Claude Code | pi | Note |
-| --- | --- | --- |
-| `Read` | `read` | `file_path` becomes `path` |
-| `Write` | `write` | |
-| `Edit`, `MultiEdit` | `edit` | one `edits[]` array; `replace_all` has no equivalent |
-| `Bash` | `bash` | timeout converts from milliseconds to seconds |
-| `Glob` | `find` | |
-| `Grep` | `grep` | `-i` becomes `ignoreCase`, `-C` becomes `context` |
-| `LS` | `ls` | |
+Both session stores are parent-linked JSONL trees. harnext follows the active
+leaf and drops abandoned rewind branches.
 
-Anything else — `TodoWrite`, `Task`, `WebFetch`, MCP tools — becomes a line of
-text in the assistant turn that names the tool, its arguments and its result.
-The conversation still records what happened, and nothing dangles. Use
-`--preserve-tools` to keep the original call instead, for archives rather than
-for resuming.
+Tool calls are translated in both directions:
 
-**Every tool call gets an answer.** A call the original session never resolved,
-because the session ended mid-turn, receives a synthetic error result.
+| Claude Code | pi |
+| --- | --- |
+| `Read` | `read` |
+| `Write` | `write` |
+| `Edit` | `edit` |
+| `Bash` | `bash` |
+| `Glob` | `find` |
+| `Grep` | `grep` |
+| `LS` | `ls` |
 
-**Thinking survives, signatures do not.** The Anthropic thinking signature is
-bound to the Anthropic API, and a resumed session can run on any provider.
+A target-unknown call and its result become ordinary assistant text. Leaving an
+unknown or unanswered tool call in history can make the provider reject the
+entire resumed conversation. A call with no recorded result receives a
+synthetic error result.
 
-**Harness records stay out of the model's context.** Hook output, mode changes
-and slash-command echoes become pi `custom` entries: stored and visible, never
-sent to a model. Claude's `<system-reminder>` blocks are removed from user
-turns, because they describe Claude's own skills and tool policy.
+Provider-signed thinking cannot cross providers. Claude → pi keeps the thinking
+text and drops its Anthropic signature. pi → Claude keeps the reasoning as
+ordinary assistant text, because Claude rejects unsigned thinking blocks.
 
-**Subagent transcripts are dropped.** The parent `Task` result already carries
-the outcome.
+Harness bookkeeping stays out of model context. Claude hooks become pi custom
+records. pi custom/extension records are dropped when writing Claude. Every
+lossy step appears in the conversion report.
 
-**Long tool results are truncated** at 10000 characters, with a marker. Raise or
-disable the cap with `--max-tool-output`.
-
-Every run reports what it did, including what it lost. `--dry-run` prints the
-same report and writes nothing.
+Tool results longer than 10000 characters are truncated with a marker unless
+`--max-tool-output 0` is used.
 
 ## Digest mode
 
-`--digest` collapses the transcript into one opening message: what was asked,
-which files changed, which commands ran, and where the session stopped. It is
-assembled from the transcript, so it needs no model and runs offline. Use it
-when the point is to carry the state of the work across, not the whole record.
+`--digest` produces one opening message containing the prompts, files changed,
+commands run, and final assistant state. It is deterministic, offline, and
+useful when you need the work state rather than the full record.
 
-## As a library
+## Requirements
+
+Node 22.19 or later. Claude → pi also requires an installed pi because harnext
+uses that installation's own `SessionManager`; pi's disk format is versioned.
+pi → Claude reads pi JSONL directly and does not load pi's runtime.
+
+Check the runtime with `node --version`. pi's code does not parse on Node 18.
+If harnext finds pi but cannot import it, the error includes the package path,
+the import failure, and the running Node version.
+
+## Library API
 
 ```ts
-import { readClaudeSessionFile, resolveClaudeSession, writeToPi } from "@buildingthefuture/harnext";
+import {
+  readPiSessionFile,
+  resolvePiSession,
+  writeToClaudeCode,
+} from "@buildingthefuture/harnext";
 
-const source = await resolveClaudeSession(process.cwd());
-const transcript = await readClaudeSessionFile(source.path);
-const result = await writeToPi(transcript);
-console.log(result.path, result.stats);
+const source = await resolvePiSession(process.cwd());
+const transcript = await readPiSessionFile(source.path);
+const result = await writeToClaudeCode(transcript);
+console.log(result.path);
 ```
 
-## Adding a harness
-
-harnext is a hub, not a converter. A reader turns a harness's files into a
-neutral `Transcript` (`src/ir.ts`); a writer turns a `Transcript` into another
-harness's files. Supporting N harnesses costs N readers and N writers, not one
-converter per pair.
-
-To add one, write `src/readers/<harness>.ts` or `src/writers/<harness>.ts`
-against the `Transcript` type. Record every lossy step with `Notes.add`, so the
-report tells the truth about what did not survive.
+The neutral `Transcript` type in `src/ir.ts` is the seam between harnesses. A
+new harness needs one reader and one writer rather than one converter per pair.
 
 ## Development
 
 ```
 npm install
+npm run typecheck
 npm test
 npm run build
 ```
-
-The round-trip tests load harnext's output back through pi's own
-`SessionManager` and build the context pi would send to a model. That is the
-only assertion that means anything: a session file pi cannot open is not a
-session.
 
 ## License
 

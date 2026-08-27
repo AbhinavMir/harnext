@@ -14,7 +14,7 @@ export type {
 } from "./ir.js";
 export { Notes, textOf } from "./ir.js";
 export { digestText, digestTranscript } from "./digest.js";
-export { mappedToolNames, mapTool, type MappedTool } from "./tools.js";
+export { mappedToolNames, mapPiTool, mapTool, type MappedTool } from "./tools.js";
 export {
 	type ClaudeReadOptions,
 	type ClaudeSessionInfo,
@@ -27,6 +27,15 @@ export {
 	SOURCE_NAME as CLAUDE_CODE_SOURCE,
 } from "./readers/claude-code.js";
 export {
+	type PiSessionInfo,
+	defaultPiSessionsRoot,
+	findPiSessions,
+	parsePiSession,
+	readPiSessionFile,
+	resolvePiSession,
+	SOURCE_NAME as PI_SOURCE,
+} from "./readers/pi.js";
+export {
 	DEFAULT_MAX_TOOL_OUTPUT_CHARS,
 	type PiEntry,
 	type PiMessage,
@@ -37,4 +46,12 @@ export {
 	type WriteStats,
 	writeToPi,
 } from "./writers/pi.js";
+export {
+	type ClaudeWriteOptions,
+	type ClaudeWriteResult,
+	type ClaudeWriteStats,
+	TARGET_NAME as CLAUDE_CODE_TARGET,
+	toClaudeRecords,
+	writeToClaudeCode,
+} from "./writers/claude-code.js";
 export { loadPiSessionApi, PiNotFoundError, type PiSessionApi, piSessionDirName } from "./pi-runtime.js";

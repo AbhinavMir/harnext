@@ -140,3 +140,74 @@ export function mapTool(name: string, input: Record<string, unknown>): MappedToo
 export function mappedToolNames(): string[] {
 	return Object.keys(MAPPERS);
 }
+
+/** Translate a pi tool call into a Claude Code built-in tool call. */
+export function mapPiTool(name: string, input: Record<string, unknown>): MappedTool | undefined {
+	switch (name) {
+		case "read":
+			return {
+				name: "Read",
+				arguments: defined({ file_path: str(input.path) ?? "", offset: num(input.offset), limit: num(input.limit) }),
+				lost: [],
+			};
+		case "write":
+			return {
+				name: "Write",
+				arguments: { file_path: str(input.path) ?? "", content: str(input.content) ?? "" },
+				lost: [],
+			};
+		case "edit": {
+			const edits = Array.isArray(input.edits) ? input.edits.map((value) =>
+				typeof value === "object" && value !== null ? value as Record<string, unknown> : undefined,
+			).filter((value): value is Record<string, unknown> => value !== undefined) : [];
+			if (edits.length !== 1) return undefined;
+			const change = edits[0] as Record<string, unknown>;
+			return {
+				name: "Edit",
+				arguments: {
+					file_path: str(input.path) ?? "",
+					old_string: str(change.oldText) ?? "",
+					new_string: str(change.newText) ?? "",
+				},
+				lost: [],
+			};
+		}
+		case "bash":
+			return {
+				name: "Bash",
+				arguments: defined({
+					command: str(input.command) ?? "",
+					timeout: num(input.timeout) === undefined ? undefined : (num(input.timeout) as number) * 1000,
+				}),
+				lost: [],
+			};
+		case "find":
+			return {
+				name: "Glob",
+				arguments: defined({ pattern: str(input.pattern) ?? "", path: str(input.path) }),
+				lost: num(input.limit) === undefined ? [] : ["find.limit"],
+			};
+		case "grep":
+			return {
+				name: "Grep",
+				arguments: defined({
+					pattern: str(input.pattern) ?? "",
+					path: str(input.path),
+					glob: str(input.glob),
+					"-i": input.ignoreCase === true ? true : undefined,
+					"-C": num(input.context),
+					head_limit: num(input.limit),
+					output_mode: "content",
+				}),
+				lost: input.literal === true ? ["grep.literal"] : [],
+			};
+		case "ls":
+			return {
+				name: "Bash",
+				arguments: { command: `ls -la ${JSON.stringify(str(input.path) ?? ".")}` },
+				lost: num(input.limit) === undefined ? [] : ["ls.limit"],
+			};
+		default:
+			return undefined;
+	}
+}

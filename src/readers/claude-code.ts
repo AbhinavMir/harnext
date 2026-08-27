@@ -51,6 +51,7 @@ interface ClaudeRecord {
 	leafUuid?: string;
 	subtype?: string;
 	title?: string;
+	aiTitle?: string;
 	summary?: string;
 	content?: unknown;
 	message?: {
@@ -275,7 +276,10 @@ export function parseClaudeSession(text: string, options: ClaudeReadOptions = {}
 	for (const record of records) {
 		if (sessionId === "" && typeof record.sessionId === "string") sessionId = record.sessionId;
 		if (cwd === "" && typeof record.cwd === "string") cwd = record.cwd;
-		if (record.type === "ai-title" && typeof record.title === "string") title = record.title;
+		if (record.type === "ai-title") {
+			if (typeof record.aiTitle === "string") title = record.aiTitle;
+			else if (typeof record.title === "string") title = record.title;
+		}
 		if (title === undefined && record.type === "summary" && typeof record.summary === "string") {
 			title = record.summary;
 		}
@@ -407,7 +411,10 @@ async function sessionInfo(path: string): Promise<ClaudeSessionInfo | undefined>
 		}
 		if (sessionId === "" && typeof record.sessionId === "string") sessionId = record.sessionId;
 		if (cwd === "" && typeof record.cwd === "string") cwd = record.cwd;
-		if (record.type === "ai-title" && typeof record.title === "string") title = record.title;
+		if (record.type === "ai-title") {
+			if (typeof record.aiTitle === "string") title = record.aiTitle;
+			else if (typeof record.title === "string") title = record.title;
+		}
 		if (firstPrompt === undefined && record.type === "user" && record.isSidechain !== true && record.isMeta !== true) {
 			const prompt = contentBlocks(record.message?.content)
 				.map(asRecord)
