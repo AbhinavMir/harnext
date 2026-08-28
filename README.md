@@ -235,8 +235,13 @@ text and drops its Anthropic signature. pi → Claude keeps the reasoning as
 ordinary assistant text, because Claude rejects unsigned thinking blocks.
 
 Harness bookkeeping stays out of model context. Claude hooks become pi custom
-records. pi custom/extension records are dropped when writing Claude. Every
-lossy step appears in the conversion report.
+records. Pi `custom` extension records are dropped when writing Claude, while
+model-visible `custom_message` records stay in the conversation as user
+context. Every lossy step appears in the conversion report.
+
+Pi compaction boundaries are preserved. Harnext emits the latest compaction
+summary, its retained tail from `firstKeptEntryId`, and messages added after the
+compaction; it does not resurrect the summarized history.
 
 Tool results longer than 10000 characters are truncated with a marker unless
 `--max-tool-output 0` is used.

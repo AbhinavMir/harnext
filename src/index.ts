@@ -100,10 +100,12 @@ export {
 	findRepoChats,
 	installedHarnesses,
 	readChat,
+	resumeCommandFor,
 	writeChat,
 	type ChatInfo,
 	type HarnessId,
 } from "./harnesses.js";
+export { shellQuote } from "./shell.js";
 export {
 	configureTellAgent,
 	defaultConfigPath,

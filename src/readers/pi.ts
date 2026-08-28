@@ -33,6 +33,12 @@ interface RecordValue {
 	customType?: string;
 	data?: unknown;
 	content?: unknown;
+	summary?: string;
+	firstKeptEntryId?: string;
+	fromId?: string;
+	tokensBefore?: number;
+	display?: boolean;
+	details?: unknown;
 	message?: Record<string, unknown>;
 }
 
@@ -67,7 +73,7 @@ function parse(text: string, notes: Notes): RecordValue[] {
 	return records;
 }
 
-function activeBranch(records: RecordValue[], notes: Notes): RecordValue[] {
+function activePath(records: RecordValue[], notes: Notes): RecordValue[] {
 	// v4 interleaves branch entries with operation/lane records. Only entries
 	// have parentId (including null at the root); lane records must not become
 	// false leaves that hide the conversation branch.
@@ -90,6 +96,23 @@ function activeBranch(records: RecordValue[], notes: Notes): RecordValue[] {
 	const dropped = entries.length - chain.length;
 	if (dropped > 0) notes.add("branch.records-off-active-branch", String(dropped));
 	return chain;
+}
+
+function compactionContext(chain: RecordValue[], notes: Notes): RecordValue[] {
+	let compactionIndex = -1;
+	for (let index = 0; index < chain.length; index += 1) {
+		if (chain[index]?.type === "compaction") compactionIndex = index;
+	}
+	if (compactionIndex < 0) return chain;
+	const compaction = chain[compactionIndex] as RecordValue;
+	const before = chain.slice(0, compactionIndex);
+	const keptIndex = typeof compaction.firstKeptEntryId === "string"
+		? before.findIndex((entry) => entry.id === compaction.firstKeptEntryId)
+		: -1;
+	const kept = keptIndex < 0 ? [] : before.slice(keptIndex);
+	const summarized = before.length - kept.length;
+	if (summarized > 0) notes.add("compaction.records-summarized", String(summarized));
+	return [compaction, ...kept, ...chain.slice(compactionIndex + 1)];
 }
 
 function blocks(content: unknown, notes: Notes): IrBlock[] {
@@ -134,8 +157,15 @@ export function parsePiSession(text: string, sourcePath?: string): Transcript {
 	let model: Transcript["model"];
 	let title: string | undefined;
 	const messages: IrMessage[] = [];
+	const path = activePath(records, notes);
+	for (const record of path) {
+		if (record.type === "model_change" && typeof record.modelId === "string") {
+			model = { ...(typeof record.provider === "string" ? { provider: record.provider } : {}), id: record.modelId };
+		}
+		if (record.type === "session_info" && typeof record.name === "string") title = record.name;
+	}
 
-	for (const record of activeBranch(records, notes)) {
+	for (const record of compactionContext(path, notes)) {
 		const ts = timestamp(record.timestamp, createdAt);
 		if (record.type === "model_change" && typeof record.modelId === "string") {
 			model = { ...(typeof record.provider === "string" ? { provider: record.provider } : {}), id: record.modelId };
@@ -145,8 +175,35 @@ export function parsePiSession(text: string, sourcePath?: string): Transcript {
 			title = record.name;
 			continue;
 		}
-		if (record.type === "custom" || record.type === "custom_message") {
+		if (record.type === "custom") {
 			messages.push({ role: "meta", ts, kind: record.customType ?? "custom", text: metaText(record) });
+			continue;
+		}
+		if (record.type === "custom_message") {
+			const content = blocks(record.content, notes);
+			if (content.length > 0) messages.push({ role: "user", ts, blocks: content });
+			continue;
+		}
+		if (record.type === "branch_summary" && typeof record.summary === "string") {
+			messages.push({
+				role: "user",
+				ts,
+				blocks: [{
+					kind: "text",
+					text: `The following is a summary of a branch that this conversation came back from:\n\n<summary>\n${record.summary}\n</summary>`,
+				}],
+			});
+			continue;
+		}
+		if (record.type === "compaction" && typeof record.summary === "string") {
+			messages.push({
+				role: "user",
+				ts,
+				blocks: [{
+					kind: "text",
+					text: `The conversation history before this point was compacted into the following summary:\n\n<summary>\n${record.summary}\n</summary>`,
+				}],
+			});
 			continue;
 		}
 		if (record.type !== "message" || record.message === undefined) continue;

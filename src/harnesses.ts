@@ -13,6 +13,7 @@ import { defaultPiSessionsRoot, findPiSessions, readPiSessionFile } from "./read
 import { writeToClaudeCode } from "./writers/claude-code.js";
 import { writeToCodex } from "./writers/codex.js";
 import { writeToOmp } from "./writers/omp.js";
+import { shellQuote } from "./shell.js";
 import { writeToPi } from "./writers/pi.js";
 
 const exec = promisify(execFile);
@@ -149,23 +150,34 @@ export async function findAllChats(): Promise<ChatInfo[]> {
 	return groups.flat().filter((chat): chat is ChatInfo => chat !== undefined).sort((a, b) => b.modifiedAt - a.modifiedAt);
 }
 
+export function resumeCommandFor(harness: HarnessId, sessionId: string, cwd: string): string {
+	const directory = shellQuote(cwd);
+	const id = shellQuote(harness === "pi" || harness === "omp" ? sessionId.slice(0, 8) : sessionId);
+	switch (harness) {
+		case "claude": return `cd ${directory} && claude --resume ${id}`;
+		case "pi": return `cd ${directory} && pi --session ${id}`;
+		case "omp": return `cd ${directory} && omp --resume ${id}`;
+		case "codex": return `cd ${directory} && codex resume ${id}`;
+	}
+}
+
 export async function writeChat(target: HarnessId, transcript: Transcript, options: WriteChatOptions = {}): Promise<WrittenChat> {
 	switch (target) {
 		case "claude": {
 			const result = await writeToClaudeCode(transcript, { path: options.path, sessionId: options.sessionId, overwrite: options.overwrite, title: options.name });
-			return { harness: target, path: result.path, sessionId: result.sessionId, resumeCommand: `cd ${transcript.cwd} && claude --resume ${result.sessionId}` };
+			return { harness: target, path: result.path, sessionId: result.sessionId, resumeCommand: resumeCommandFor(target, result.sessionId, transcript.cwd) };
 		}
 		case "pi": {
 			const result = await writeToPi(transcript, { path: options.path, sessionId: options.sessionId, overwrite: options.overwrite, name: options.name });
-			return { harness: target, path: result.path, sessionId: result.sessionId, resumeCommand: `cd ${transcript.cwd} && pi --session ${result.sessionId.slice(0, 8)}` };
+			return { harness: target, path: result.path, sessionId: result.sessionId, resumeCommand: resumeCommandFor(target, result.sessionId, transcript.cwd) };
 		}
 		case "omp": {
 			const result = await writeToOmp(transcript, { path: options.path, sessionId: options.sessionId, overwrite: options.overwrite, name: options.name });
-			return { harness: target, path: result.path, sessionId: result.sessionId, resumeCommand: `cd ${transcript.cwd} && omp --resume ${result.sessionId.slice(0, 8)}` };
+			return { harness: target, path: result.path, sessionId: result.sessionId, resumeCommand: resumeCommandFor(target, result.sessionId, transcript.cwd) };
 		}
 		case "codex": {
 			const result = await writeToCodex(transcript, { path: options.path, sessionId: options.sessionId, overwrite: options.overwrite, title: options.name });
-			return { harness: target, path: result.path, sessionId: result.sessionId, resumeCommand: `cd ${transcript.cwd} && codex resume ${result.sessionId}` };
+			return { harness: target, path: result.path, sessionId: result.sessionId, resumeCommand: resumeCommandFor(target, result.sessionId, transcript.cwd) };
 		}
 	}
 }

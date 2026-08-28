@@ -54,6 +54,46 @@ describe("parsePiSession", () => {
 		expect(transcript.messages[0]).toMatchObject({ role: "meta", kind: "remote-pi", text: '{"state":"connected"}' });
 	});
 
+	it("keeps custom_message content in model-visible user context", () => {
+		const transcript = parsePiSession(jsonl([
+			header,
+			{ type: "custom_message", id: "c", parentId: null, timestamp: "2026-08-27T00:00:01Z", customType: "remote-agent", content: [{ type: "text", text: "Do not publish until review finishes." }], display: true },
+		]));
+
+		expect(transcript.messages).toEqual([
+			expect.objectContaining({ role: "user", blocks: [{ kind: "text", text: "Do not publish until review finishes." }] }),
+		]);
+	});
+
+	it("uses the latest compaction summary and retained tail instead of resurrecting summarized messages", () => {
+		const transcript = parsePiSession(jsonl([
+			header,
+			{ type: "model_change", id: "m", parentId: null, timestamp: "2026-08-27T00:00:00.500Z", provider: "openai", modelId: "gpt-5" },
+			{ type: "message", id: "old", parentId: "m", timestamp: "2026-08-27T00:00:01Z", message: { role: "user", content: "summarized old prompt" } },
+			{ type: "message", id: "keep", parentId: "old", timestamp: "2026-08-27T00:00:02Z", message: { role: "assistant", content: "retained answer" } },
+			{ type: "compaction", id: "compact", parentId: "keep", timestamp: "2026-08-27T00:00:03Z", summary: "The task is halfway complete.", firstKeptEntryId: "keep", tokensBefore: 250_000 },
+			{ type: "message", id: "after", parentId: "compact", timestamp: "2026-08-27T00:00:04Z", message: { role: "user", content: "continue from here" } },
+		]));
+
+		const serialized = JSON.stringify(transcript.messages);
+		expect(serialized).toContain("conversation history before this point was compacted");
+		expect(serialized).toContain("The task is halfway complete.");
+		expect(serialized).toContain("retained answer");
+		expect(serialized).toContain("continue from here");
+		expect(serialized).not.toContain("summarized old prompt");
+		expect(transcript.model).toEqual({ provider: "openai", id: "gpt-5" });
+	});
+
+	it("keeps branch summaries in model-visible context", () => {
+		const transcript = parsePiSession(jsonl([
+			header,
+			{ type: "branch_summary", id: "s", parentId: null, timestamp: "2026-08-27T00:00:01Z", summary: "The alternate approach was rejected.", fromId: "old-branch" },
+		]));
+
+		expect(JSON.stringify(transcript.messages)).toContain("summary of a branch");
+		expect(JSON.stringify(transcript.messages)).toContain("alternate approach was rejected");
+	});
+
 	it("keeps only the active leaf branch", () => {
 		const transcript = parsePiSession(jsonl([
 			header,

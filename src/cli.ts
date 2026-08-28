@@ -17,6 +17,7 @@ import {
 	installedHarnesses,
 	readChat,
 	resolveCurrentChat,
+	resumeCommandFor,
 	shortProject,
 	writeChat,
 	type ChatInfo,
@@ -445,18 +446,9 @@ async function selectedRepoChat(options: Options, preferCurrent: boolean): Promi
 	return choose("Choose chat", chats.map((chat) => ({ label: chatLine(chat), value: chat })));
 }
 
-function resumeMember(harness: HarnessId, sessionId: string, cwd: string): string {
-	switch (harness) {
-		case "claude": return `cd ${cwd} && claude --resume ${sessionId}`;
-		case "pi": return `cd ${cwd} && pi --session ${sessionId.slice(0, 8)}`;
-		case "omp": return `cd ${cwd} && omp --resume ${sessionId.slice(0, 8)}`;
-		case "codex": return `cd ${cwd} && codex resume ${sessionId}`;
-	}
-}
-
 async function reportSync(result: Awaited<ReturnType<typeof syncChat>>): Promise<void> {
 	process.stdout.write(`Source: ${HARNESS_LABELS[result.source.harness]} ${result.source.sessionId.slice(0, 8)} · ${result.source.path}\n`);
-	for (const member of result.written) process.stdout.write(`${HARNESS_LABELS[member.harness]}: synced · ${member.path}\n  ${resumeMember(member.harness, member.sessionId, result.group.cwd)}\n`);
+	for (const member of result.written) process.stdout.write(`${HARNESS_LABELS[member.harness]}: synced · ${member.path}\n  ${resumeCommandFor(member.harness, member.sessionId, result.group.cwd)}\n`);
 	for (const member of result.skippedAlive) process.stdout.write(`${HARNESS_LABELS[member.harness]}: open; left unchanged\n`);
 	for (const harness of result.unavailable) process.stdout.write(`${HARNESS_LABELS[harness]}: not installed\n`);
 	process.stdout.write(`State: ${join(defaultStateRoot(), "groups", `${result.group.id}.json`)}\n`);
@@ -573,7 +565,7 @@ async function run(argv: string[]): Promise<number> {
 		});
 		process.stdout.write(`${source.path}\n  -> ${result.path}\n${piReport(transcript, options).join("\n")}\n`);
 		process.stdout.write(`  written by pi ${result.writtenBy.version} at ${result.writtenBy.origin}\n`);
-		process.stdout.write(`\nResume it:\n  cd ${transcript.cwd} && pi --session ${result.sessionId.slice(0, 8)}\n`);
+		process.stdout.write(`\nResume it:\n  ${resumeCommandFor("pi", result.sessionId, transcript.cwd)}\n`);
 		return 0;
 	}
 
@@ -592,7 +584,7 @@ async function run(argv: string[]): Promise<number> {
 		...(options.projectsRoot === undefined ? {} : { projectsRoot: options.projectsRoot }),
 	});
 	process.stdout.write(`${source.path}\n  -> ${result.path}\n${claudeReport(transcript, options).join("\n")}\n`);
-	process.stdout.write(`\nResume it:\n  cd ${transcript.cwd} && claude --resume ${result.sessionId}\n`);
+	process.stdout.write(`\nResume it:\n  ${resumeCommandFor("claude", result.sessionId, transcript.cwd)}\n`);
 	return 0;
 }
 
