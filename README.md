@@ -46,6 +46,34 @@ environment. It does not call a recently modified but closed chat alive.
 Codex imports are written as rollout history and registered through Codex's own
 `migrate-rollouts` command. Oh My Pi imports use its native v3 session format.
 
+## Tell the receiving agent
+
+Interactive transfers ask:
+
+```
+Tell the receiving agent about switching harnesses?
+[Y] Yes once    [A] Always    [N] No
+```
+
+The recommended notice is a final model-visible user message. It tells the
+receiving agent to inspect its MCP servers, tools, skills, extensions, and
+runtime state because these can differ between harnesses. Harnext recognizes
+its marker and does not duplicate the notice during watchdog updates.
+
+`A` stores the preference in `~/.harnext/config.json`. `N` skips only the
+current transfer. Change the persistent behavior with the single-key config UI
+or a scriptable option:
+
+```
+harnext config
+harnext config --tell-agent ask
+harnext config --tell-agent always
+harnext config --tell-agent never
+```
+
+The default is `ask`. Non-interactive transfers treat `ask` as no; set `always`
+when scripts should add the notice.
+
 ## Sync
 
 ```

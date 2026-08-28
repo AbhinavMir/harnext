@@ -105,6 +105,17 @@ export {
 	type HarnessId,
 } from "./harnesses.js";
 export {
+	configureTellAgent,
+	defaultConfigPath,
+	promptTellAgent,
+	readConfig,
+	shouldTellAgent,
+	withSwitchNotice,
+	writeConfig,
+	type HarnextConfig,
+	type TellAgentMode,
+} from "./switch-notice.js";
+export {
 	defaultStateRoot,
 	runWatchdog,
 	syncChat,

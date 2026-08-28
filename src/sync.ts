@@ -19,6 +19,7 @@ import {
 	type HarnessId,
 } from "./harnesses.js";
 import type { Transcript } from "./ir.js";
+import { withSwitchNotice } from "./switch-notice.js";
 
 export interface SyncMember {
 	harness: HarnessId;
@@ -34,6 +35,7 @@ export interface SyncGroup {
 	createdAt: string;
 	updatedAt: string;
 	members: Partial<Record<HarnessId, SyncMember>>;
+	tellAgent?: boolean;
 }
 
 export interface SyncResult {
@@ -132,17 +134,19 @@ async function refreshTargets(group: SyncGroup, source: ChatInfo, transcript: Tr
 	return { written, skippedAlive };
 }
 
-export async function syncChat(source: ChatInfo, options: { stateRoot?: string; protectAlive?: boolean } = {}): Promise<SyncResult> {
+export async function syncChat(source: ChatInfo, options: { stateRoot?: string; protectAlive?: boolean; tellAgent?: boolean } = {}): Promise<SyncResult> {
 	const stateRoot = options.stateRoot ?? defaultStateRoot();
 	const transcript = await stableTranscript(source);
 	const groups = await loadGroups(stateRoot);
 	const group = findGroup(groups, source) ?? newGroup(source);
+	if (options.tellAgent !== undefined) group.tellAgent = options.tellAgent;
+	const outbound = group.tellAgent === true ? withSwitchNotice(transcript, source.harness) : transcript;
 	const installed = await installedHarnesses();
 	const sourceMember: SyncMember = { harness: source.harness, path: source.path, sessionId: source.sessionId, fingerprint: transcriptFingerprint(transcript) };
 	group.members[source.harness] = sourceMember;
 	let refreshed: { written: SyncMember[]; skippedAlive: SyncMember[] };
 	try {
-		refreshed = await refreshTargets(group, source, transcript, installed, options.protectAlive ?? true);
+		refreshed = await refreshTargets(group, source, outbound, installed, options.protectAlive ?? true);
 	} catch (error) {
 		group.updatedAt = new Date().toISOString();
 		await saveGroup(group, stateRoot);
@@ -201,7 +205,8 @@ export async function watchdogIteration(group: SyncGroup, stateRoot = defaultSta
 	group.members[update.member.harness] = update.member;
 	let refreshed: { written: SyncMember[]; skippedAlive: SyncMember[] };
 	try {
-		refreshed = await refreshTargets(group, sourceChat, update.transcript, targets.map((target) => target.harness), false);
+		const outbound = group.tellAgent === true ? withSwitchNotice(update.transcript, update.member.harness) : update.transcript;
+		refreshed = await refreshTargets(group, sourceChat, outbound, targets.map((target) => target.harness), false);
 	} catch (error) {
 		group.updatedAt = new Date().toISOString();
 		await saveGroup(group, stateRoot);
@@ -212,9 +217,9 @@ export async function watchdogIteration(group: SyncGroup, stateRoot = defaultSta
 	return { type: "synced", group, source: update.member, targets: refreshed.written };
 }
 
-export async function runWatchdog(source: ChatInfo, options: { stateRoot?: string; intervalMs?: number; signal?: AbortSignal; onEvent?: (event: WatchdogEvent) => void } = {}): Promise<void> {
+export async function runWatchdog(source: ChatInfo, options: { stateRoot?: string; intervalMs?: number; signal?: AbortSignal; onEvent?: (event: WatchdogEvent) => void; tellAgent?: boolean } = {}): Promise<void> {
 	const stateRoot = options.stateRoot ?? defaultStateRoot();
-	const initial = await syncChat(source, { stateRoot, protectAlive: true });
+	const initial = await syncChat(source, { stateRoot, protectAlive: true, tellAgent: options.tellAgent });
 	let group = initial.group;
 	const interval = options.intervalMs ?? 1500;
 	while (options.signal?.aborted !== true) {

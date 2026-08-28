@@ -51,10 +51,13 @@ async function fixture(): Promise<{ root: string; group: SyncGroup; ompPath: str
 describe("watchdog", () => {
 	it("propagates the only changed member to inactive mirrors", async () => {
 		const item = await fixture();
+		item.group.tellAgent = true;
 		await writeToOmp(transcript(2), { path: item.ompPath, sessionId: "omp-id", overwrite: true });
 		const event = await watchdogIteration(item.group, join(item.root, "state"));
 		expect(event.type).toBe("synced");
-		expect(JSON.stringify((await readClaudeSessionFile(item.claudePath)).messages)).toContain("prompt 2");
+		const messages = JSON.stringify((await readClaudeSessionFile(item.claudePath)).messages);
+		expect(messages).toContain("prompt 2");
+		expect(messages).toContain("harnext switch notice");
 	});
 
 	it("stops before overwriting concurrent divergent changes", async () => {

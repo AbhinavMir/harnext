@@ -40,10 +40,11 @@ import {
 	writeToClaudeCode,
 } from "./writers/claude-code.js";
 import { defaultStateRoot, runWatchdog, syncChat, type WatchdogEvent } from "./sync.js";
+import { configureTellAgent, defaultConfigPath, shouldTellAgent, withSwitchNotice, type TellAgentMode } from "./switch-notice.js";
 import { DEFAULT_MAX_TOOL_OUTPUT_CHARS, toPiEntries, writeToPi } from "./writers/pi.js";
 
 type Direction = "claude-to-pi" | "pi-to-claude";
-type Operation = "browse" | "all" | "sync" | "watchdog" | "transfer" | "export";
+type Operation = "browse" | "all" | "sync" | "watchdog" | "transfer" | "export" | "config";
 type ExportSource = HarnessId;
 
 interface Options {
@@ -76,6 +77,7 @@ interface Options {
 	alive: boolean;
 	to?: HarnessId | "all";
 	intervalMs: number;
+	tellAgentMode?: TellAgentMode;
 }
 
 const USAGE = `harnext - switch and sync coding-agent chats
@@ -85,6 +87,7 @@ Usage:
   harnext all [alive]                List every chat, optionally only confirmed live chats
   harnext sync [options]             Copy the current chat into every installed harness
   harnext watchdog [options]         Keep one sync group current until stopped or conflicted
+  harnext config                     Configure the receiving-agent switch notice
   harnext claude-to-pi [options]     Explicit Claude Code to pi transfer
   harnext pi-to-claude [options]     Explicit pi to Claude Code transfer
   harnext export [options]           Export user prompt history
@@ -95,6 +98,7 @@ Selection and sync options:
   --to <harness|all>              Skip the destination picker
   --session <path|id>             Select a source session by path or id prefix
   --interval <milliseconds>       Watchdog scan interval (default: 1500)
+  --tell-agent <ask|always|never>  Set switch-notice behavior with harnext config
 
 Export options:
   --from <harness>                Source harness (default: claude)
@@ -163,6 +167,9 @@ function parseArgs(argv: string[]): Options {
 	} else if (command === "watchdog") {
 		options.operation = "watchdog";
 		start = 1;
+	} else if (command === "config") {
+		options.operation = "config";
+		start = 1;
 	} else if (command === "claude-to-pi" || command === "to-pi") {
 		options.operation = "transfer";
 		options.direction = "claude-to-pi";
@@ -198,6 +205,12 @@ function parseArgs(argv: string[]): Options {
 				const value = Number.parseInt(next(), 10);
 				if (!Number.isSafeInteger(value) || value < 250) throw new Error("--interval must be at least 250 milliseconds");
 				options.intervalMs = value;
+				break;
+			}
+			case "--tell-agent": {
+				const value = next();
+				if (value !== "ask" && value !== "always" && value !== "never") throw new Error("--tell-agent must be ask, always, or never");
+				options.tellAgentMode = value;
 				break;
 			}
 			case "--mode": {
@@ -468,7 +481,8 @@ async function runBrowse(options: Options): Promise<number> {
 			process.stdout.write(`${source.path}\n  would sync to: ${installed.map((harness) => HARNESS_LABELS[harness]).join(", ")}\n  nothing written (--dry-run)\n`);
 			return 0;
 		}
-		await reportSync(await syncChat(source));
+		const tellAgent = await shouldTellAgent();
+		await reportSync(await syncChat(source, { tellAgent }));
 		return 0;
 	}
 	if (!installed.includes(target)) throw new Error(`${HARNESS_LABELS[target]} is not installed or is the source harness`);
@@ -476,7 +490,8 @@ async function runBrowse(options: Options): Promise<number> {
 		process.stdout.write(`${source.path}\n  would copy to ${HARNESS_LABELS[target]}\n  nothing written (--dry-run)\n`);
 		return 0;
 	}
-	const transcript = options.digest ? digestTranscript(await readChat(source)) : await readChat(source);
+	let transcript = options.digest ? digestTranscript(await readChat(source)) : await readChat(source);
+	if (await shouldTellAgent()) transcript = withSwitchNotice(transcript, source.harness);
 	const result = await writeChat(target, transcript, { name: options.name ?? transcript.title });
 	process.stdout.write(`${source.path}\n  -> ${result.path}\n\nResume it:\n  ${result.resumeCommand}\n`);
 	return 0;
@@ -494,6 +509,12 @@ function watchdogMessage(event: WatchdogEvent): void {
 	if (event.type === "waiting") process.stdout.write(`${new Date().toISOString()}  waiting: ${event.targets?.map((target) => HARNESS_LABELS[target.harness]).join(", ")} is open\n`);
 }
 
+async function runConfig(options: Options): Promise<number> {
+	const config = await configureTellAgent(options.tellAgentMode);
+	process.stdout.write(`Tell receiving agent: ${config.tellAgent}\nConfig: ${defaultConfigPath()}\n`);
+	return 0;
+}
+
 async function runSyncCommand(options: Options, watchdog: boolean): Promise<number> {
 	const source = await selectedRepoChat(options, true);
 	if (options.dryRun) {
@@ -501,8 +522,9 @@ async function runSyncCommand(options: Options, watchdog: boolean): Promise<numb
 		process.stdout.write(`${source.path}\n  would ${watchdog ? "watch and sync" : "sync"} to: ${targets.map((harness) => HARNESS_LABELS[harness]).join(", ")}\n  nothing written (--dry-run)\n`);
 		return 0;
 	}
+	const tellAgent = await shouldTellAgent();
 	if (!watchdog) {
-		await reportSync(await syncChat(source));
+		await reportSync(await syncChat(source, { tellAgent }));
 		return 0;
 	}
 	process.stdout.write(`Watching ${HARNESS_LABELS[source.harness]} ${source.sessionId.slice(0, 8)} every ${options.intervalMs}ms. Ctrl-C stops it.\n`);
@@ -511,7 +533,7 @@ async function runSyncCommand(options: Options, watchdog: boolean): Promise<numb
 	process.once("SIGINT", stop);
 	process.once("SIGTERM", stop);
 	try {
-		await runWatchdog(source, { intervalMs: options.intervalMs, signal: controller.signal, onEvent: watchdogMessage });
+		await runWatchdog(source, { intervalMs: options.intervalMs, signal: controller.signal, onEvent: watchdogMessage, tellAgent });
 	} catch (error) {
 		if (!(error instanceof Error && error.name === "AbortError")) throw error;
 	} finally {
@@ -530,16 +552,18 @@ async function run(argv: string[]): Promise<number> {
 	if (options.operation === "all") return runAllChats(options);
 	if (options.operation === "sync") return runSyncCommand(options, false);
 	if (options.operation === "watchdog") return runSyncCommand(options, true);
+	if (options.operation === "config") return runConfig(options);
 	if (options.list) { await listSource(options); return 0; }
 
 	if (options.direction === "claude-to-pi") {
 		const source = await resolveClaudeSession(options.cwd, options.session, options.projectsRoot);
 		const parsed = await readClaudeSessionFile(source.path, { keepSystemReminders: options.keepReminders });
-		const transcript = options.digest ? digestTranscript(parsed) : parsed;
+		let transcript = options.digest ? digestTranscript(parsed) : parsed;
 		if (options.dryRun) {
 			process.stdout.write(`${source.path}\n${piReport(transcript, options).join("\n")}\n  nothing written (--dry-run)\n`);
 			return 0;
 		}
+		if (await shouldTellAgent()) transcript = withSwitchNotice(transcript, "claude");
 		const result = await writeToPi(transcript, {
 			preserveTools: options.preserveTools,
 			maxToolOutputChars: options.maxToolOutput,
@@ -555,11 +579,12 @@ async function run(argv: string[]): Promise<number> {
 
 	const source = await resolvePiSession(options.cwd, options.session, options.sessionsRoot);
 	const parsed = await readPiSessionFile(source.path);
-	const transcript = options.digest ? digestTranscript(parsed) : parsed;
+	let transcript = options.digest ? digestTranscript(parsed) : parsed;
 	if (options.dryRun) {
 		process.stdout.write(`${source.path}\n${claudeReport(transcript, options).join("\n")}\n  nothing written (--dry-run)\n`);
 		return 0;
 	}
+	if (await shouldTellAgent()) transcript = withSwitchNotice(transcript, "pi");
 	const result = await writeToClaudeCode(transcript, {
 		preserveTools: options.preserveTools,
 		maxToolOutputChars: options.maxToolOutput,
