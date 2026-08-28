@@ -6,8 +6,9 @@
  * packages; the round-trip test checks them against the real ones.
  */
 
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
+import { writeTextFile } from "../atomic.js";
 import type { IrBlock, IrToolResultMessage, Transcript } from "../ir.js";
 import { loadPiSessionApi, piSessionDirName, piSessionFileName } from "../pi-runtime.js";
 import { mapTool } from "../tools.js";
@@ -91,6 +92,10 @@ export interface PiWriteOptions {
 	name?: string;
 	/** Path to a specific `@earendil-works/pi-coding-agent` package to write with. */
 	piPackage?: string;
+	/** Stable identity/path used when refreshing an inactive sync mirror. */
+	sessionId?: string;
+	path?: string;
+	overwrite?: boolean;
 }
 
 export interface WriteStats {
@@ -324,12 +329,13 @@ export async function writeToPi(transcript: Transcript, options: PiWriteOptions 
 		else session.appendCustomEntry(entry.customType, entry.data);
 	}
 
-	const header = session.getHeader();
-	if (header === null) throw new Error("pi built a session without a header");
-	const path = join(sessionDir, piSessionFileName(header));
+	const generatedHeader = session.getHeader();
+	if (generatedHeader === null) throw new Error("pi built a session without a header");
+	const header = options.sessionId === undefined ? generatedHeader : { ...generatedHeader, id: options.sessionId };
+	const path = options.path ?? join(sessionDir, piSessionFileName(header));
 	const lines = [header, ...session.getEntries()].map((entry) => JSON.stringify(entry));
 	await mkdir(sessionDir, { recursive: true });
-	await writeFile(path, `${lines.join("\n")}\n`, { flag: "wx" });
+	await writeTextFile(path, `${lines.join("\n")}\n`, options.overwrite === true);
 
-	return { path, sessionId: session.getSessionId(), stats, writtenBy: { origin: api.origin, version: api.version } };
+	return { path, sessionId: header.id, stats, writtenBy: { origin: api.origin, version: api.version } };
 }

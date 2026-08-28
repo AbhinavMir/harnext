@@ -1,6 +1,6 @@
 # harnext
 
-Move coding-agent chat history between Claude Code and pi.
+Choose, transfer, and sync chats across Claude Code, pi, Oh My Pi, and Codex.
 
 ```
 npm i -g @buildingthefuture/harnext
@@ -12,46 +12,74 @@ npm i -g @buildingthefuture/harnext
 
 ![harnext HTML prompt-history export](https://raw.githubusercontent.com/AbhinavMir/harnext/main/docs/screenshots/prompt-export.png)
 
-## Claude Code → pi
+## Choose any chat
 
-From the project whose conversation you want to move:
+Run harnext inside a repository:
 
 ```
 cd your-project
 harnext
 ```
 
-`claude-to-pi` is the default direction. The explicit form is:
+It combines Claude Code, pi, Oh My Pi, and Codex chats for that repository into
+one newest-first numbered list. Choose a chat, then choose one destination or
+all installed harnesses. In a pipe or script it prints the list instead of
+waiting for input; use `--session <id> --to <harness|all>` for a non-interactive
+transfer.
+
+```
+harnext all
+harnext all alive
+```
+
+`all` lists chats across every repository. `all alive` includes only sessions
+that harnext can tie to a running process, terminal record, or current harness
+environment. It does not call a recently modified but closed chat alive.
+
+| Harness | Read | Write | Resume |
+| --- | --- | --- | --- |
+| Claude Code | yes | yes | `claude --resume <id>` |
+| pi | yes | yes | `pi --session <id>` |
+| Oh My Pi | yes | yes | `omp --resume <id>` |
+| Codex CLI/App | yes | yes | `codex resume <id>` |
+
+Codex imports are written as rollout history and registered through Codex's own
+`migrate-rollouts` command. Oh My Pi imports use its native v3 session format.
+
+## Sync
+
+```
+harnext sync
+harnext watchdog
+```
+
+`sync` detects the current harness from its session environment. From an
+ordinary terminal it opens the repo picker. It creates one mirror in every
+installed harness and records the group under `~/.harnext/groups/`.
+
+`watchdog` stays in the foreground and checks the group every 1500ms. One
+changed member becomes the source and is copied to the inactive mirrors. Writes
+are debounced and atomic, so a partial JSONL record is never propagated. A
+running target harness is left untouched until it closes. If two members change
+before a sync pass, watchdog stops and reports a conflict without overwriting
+either history. This makes switching safe when only one harness edits the chat
+at a time; it is not a multi-writer merge system.
+
+Use `--interval <milliseconds>` to change the scan interval. Ctrl-C stops the
+watchdog. Sync state contains paths, session IDs, timestamps, and content
+fingerprints, not transcript text.
+
+## Explicit transfers
+
+The original two-harness commands remain available:
 
 ```
 harnext claude-to-pi
-```
-
-harnext reads the newest Claude Code session for the directory, writes a new pi
-session, and prints the exact resume command:
-
-```
-pi --session 01a04033
-```
-
-## pi → Claude Code
-
-```
-cd your-project
 harnext pi-to-claude
 ```
 
-harnext reads the newest pi session for the directory, writes a new Claude Code
-session, and prints:
-
-```
-claude --resume 2db50c18-c116-4f54-a65e-e14d86d9f599
-```
-
-These are snapshot imports, not live synchronization. Further messages stay in
-the harness where you send them. Run harnext again to move a newer snapshot.
-Files need no synchronization because both harnesses work in the same project
-directory.
+Each reads the newest source session unless `--session` is supplied and prints
+the exact resume command.
 
 ## Export prompt history
 
@@ -130,7 +158,9 @@ harnext claude-to-pi --session 278e6bb8
 | --- | --- |
 | `--cwd <dir>` | Project directory. Default: the current directory. |
 | `--session <path|id>` | Source session path, id, or unambiguous id prefix. |
-| `--list` | List sessions from the source harness. |
+| `--to <claude|pi|omp|codex|all>` | Skip the destination picker. |
+| `--interval <milliseconds>` | Watchdog scan interval; minimum 250, default 1500. |
+| `--list` | List sessions from a legacy transfer source harness. |
 | `--dry-run` | Report the conversion and write nothing. |
 | `--digest` | Import one deterministic summary instead of the full transcript. |
 | `--name <name>` | Display name/title for the imported session. |
@@ -214,8 +244,15 @@ const result = await writeToClaudeCode(transcript);
 console.log(result.path);
 ```
 
-The neutral `Transcript` type in `src/ir.ts` is the seam between harnesses. A
-new harness needs one reader and one writer rather than one converter per pair.
+The neutral `Transcript` type in `src/ir.ts` is the boundary between harnesses.
+A new harness needs one reader, one writer, and one registry entry rather than
+one converter per pair.
+
+## Add another harness
+
+See [CONTRIBUTING.md](CONTRIBUTING.md). New adapters must document the session
+store, use the neutral transcript model, preserve stable mirror identity, and
+pass reader, writer, resume, and watchdog-conflict tests.
 
 ## Development
 

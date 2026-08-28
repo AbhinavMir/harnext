@@ -1,8 +1,9 @@
 /** Writer for resumable Claude Code JSONL sessions. */
 
 import { randomBytes, randomUUID } from "node:crypto";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
+import { writeTextFile } from "../atomic.js";
 import type { IrBlock, IrToolResultMessage, Transcript } from "../ir.js";
 import { claudeProjectSlug, claudeProjectsRoot } from "../readers/claude-code.js";
 import { mapPiTool } from "../tools.js";
@@ -15,6 +16,10 @@ export interface ClaudeWriteOptions {
 	preserveTools?: boolean;
 	maxToolOutputChars?: number;
 	title?: string;
+	/** Stable identity/path used when refreshing an inactive sync mirror. */
+	sessionId?: string;
+	path?: string;
+	overwrite?: boolean;
 }
 
 export interface ClaudeWriteStats {
@@ -81,7 +86,7 @@ function iso(ts: number): string {
 export function toClaudeRecords(
 	transcript: Transcript,
 	options: ClaudeWriteOptions = {},
-	sessionId = randomUUID(),
+	sessionId: string = randomUUID(),
 ): { records: ClaudeRecord[]; stats: ClaudeWriteStats } {
 	const limit = options.maxToolOutputChars ?? DEFAULT_MAX_TOOL_OUTPUT_CHARS;
 	const stats: ClaudeWriteStats = {
@@ -234,12 +239,12 @@ export function toClaudeRecords(
 }
 
 export async function writeToClaudeCode(transcript: Transcript, options: ClaudeWriteOptions = {}): Promise<ClaudeWriteResult> {
-	const sessionId = randomUUID();
+	const sessionId = options.sessionId ?? randomUUID();
 	const { records, stats } = toClaudeRecords(transcript, options, sessionId);
 	const root = options.projectsRoot ?? claudeProjectsRoot();
 	const directory = join(root, claudeProjectSlug(transcript.cwd));
-	const path = join(directory, `${sessionId}.jsonl`);
+	const path = options.path ?? join(directory, `${sessionId}.jsonl`);
 	await mkdir(directory, { recursive: true });
-	await writeFile(path, `${records.map((record) => JSON.stringify(record)).join("\n")}\n`, { flag: "wx" });
+	await writeTextFile(path, `${records.map((record) => JSON.stringify(record)).join("\n")}\n`, options.overwrite === true);
 	return { path, sessionId, stats };
 }

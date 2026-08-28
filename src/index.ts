@@ -74,3 +74,44 @@ export {
 	writeToClaudeCode,
 } from "./writers/claude-code.js";
 export { loadPiSessionApi, PiNotFoundError, type PiSessionApi, piSessionDirName } from "./pi-runtime.js";
+export {
+	defaultOmpSessionsRoot,
+	findOmpSessions,
+	ompSessionDirName,
+	parseOmpSession,
+	readOmpSessionFile,
+	resolveOmpSession,
+} from "./readers/omp.js";
+export {
+	defaultCodexRoot,
+	findAllCodexSessions,
+	findCodexSessions,
+	parseCodexSession,
+	readCodexSessionFile,
+	resolveCodexSession,
+	type CodexSessionInfo,
+} from "./readers/codex.js";
+export { toOmpRecords, writeToOmp, type OmpWriteOptions, type OmpWriteResult } from "./writers/omp.js";
+export { toCodexRecords, writeToCodex, type CodexWriteOptions, type CodexWriteResult, type CodexWriteStats } from "./writers/codex.js";
+export {
+	HARNESSES,
+	HARNESS_LABELS,
+	findAllChats,
+	findRepoChats,
+	installedHarnesses,
+	readChat,
+	writeChat,
+	type ChatInfo,
+	type HarnessId,
+} from "./harnesses.js";
+export {
+	defaultStateRoot,
+	runWatchdog,
+	syncChat,
+	transcriptFingerprint,
+	watchdogIteration,
+	type SyncGroup,
+	type SyncMember,
+	type SyncResult,
+	type WatchdogEvent,
+} from "./sync.js";
