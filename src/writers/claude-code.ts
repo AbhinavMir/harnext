@@ -1,6 +1,6 @@
 /** Writer for resumable Claude Code JSONL sessions. */
 
-import { randomBytes, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { writeTextFile } from "../atomic.js";
@@ -76,6 +76,12 @@ function importedToolText(name: string, args: Record<string, unknown>, result: s
 
 function messageId(): string {
 	return `msg_${randomBytes(12).toString("hex")}`;
+}
+
+function claudeToolUseId(id: string): string {
+	return /^[a-zA-Z0-9_-]+$/.test(id)
+		? id
+		: `tool_${createHash("sha256").update(id).digest("hex").slice(0, 32)}`;
 }
 
 function iso(ts: number): string {
@@ -171,18 +177,19 @@ export function toClaudeRecords(
 
 			const name = mapped?.name ?? block.name;
 			const input = mapped?.arguments ?? block.arguments;
+			const toolUseId = claudeToolUseId(block.id);
 			if (mapped === undefined) stats.toolsDegraded += 1;
 			else {
 				stats.toolsMapped += 1;
 				for (const lost of mapped.lost) if (!stats.argumentsLost.includes(lost)) stats.argumentsLost.push(lost);
 			}
-			assistantContent.push({ type: "tool_use", id: block.id, name, input });
+			assistantContent.push({ type: "tool_use", id: toolUseId, name, input });
 			hasToolUse = true;
 			if (result === undefined) {
 				stats.resultsSynthesized += 1;
 				toolResults.push({
 					type: "tool_result",
-					tool_use_id: block.id,
+					tool_use_id: toolUseId,
 					content: "[harnext] the original pi session recorded no result for this call.",
 					is_error: true,
 				});
@@ -191,7 +198,7 @@ export function toClaudeRecords(
 				if (output.truncated) stats.resultsTruncated += 1;
 				toolResults.push({
 					type: "tool_result",
-					tool_use_id: block.id,
+					tool_use_id: toolUseId,
 					content: output.text,
 					...(result.isError ? { is_error: true } : {}),
 				});

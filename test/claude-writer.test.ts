@@ -41,6 +41,21 @@ describe("toClaudeRecords", () => {
 		expect(parsed.messages[1]).toMatchObject({ role: "toolResult", callId: "c1", name: "Read" });
 	});
 
+	it("rewrites provider-specific tool ids to Claude-safe ids", () => {
+		const original = "call_abc|fc_123";
+		const { records } = toClaudeRecords(transcript([
+			{ role: "assistant", ts: 1, blocks: [{ kind: "toolCall", id: original, name: "read", arguments: { path: "README.md" } }] },
+			{ role: "toolResult", ts: 2, callId: original, name: "read", isError: false, blocks: [{ kind: "text", text: "body" }] },
+		]), {}, "claude-1");
+		const assistant = records.find((record) => record.type === "assistant") as { message: { content: { type: string; id?: string }[] } };
+		const user = records.find((record) => record.type === "user") as { message: { content: { type: string; tool_use_id?: string }[] } };
+		const id = assistant.message.content.find((block) => block.type === "tool_use")?.id;
+
+		expect(id).toMatch(/^[a-zA-Z0-9_-]+$/);
+		expect(id).not.toBe(original);
+		expect(user.message.content.find((block) => block.type === "tool_result")?.tool_use_id).toBe(id);
+	});
+
 	it("degrades a pi-only tool call with its result", () => {
 		const { records, stats } = toClaudeRecords(transcript([
 			{ role: "assistant", ts: 1, blocks: [{ kind: "toolCall", id: "c1", name: "agent_send", arguments: { to: "peer" } }] },
