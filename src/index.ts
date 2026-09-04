@@ -94,6 +94,13 @@ export {
 export { toOmpRecords, writeToOmp, type OmpWriteOptions, type OmpWriteResult } from "./writers/omp.js";
 export { toCodexRecords, writeToCodex, type CodexWriteOptions, type CodexWriteResult, type CodexWriteStats } from "./writers/codex.js";
 export {
+	HARNESS_ADAPTERS,
+	harnessAdapter,
+	type HarnessAdapter,
+	type HarnessSessionInfo,
+	type WriteChatOptions,
+} from "./adapters/index.js";
+export {
 	HARNESSES,
 	HARNESS_LABELS,
 	findAllChats,
@@ -106,6 +113,7 @@ export {
 	type HarnessId,
 } from "./harnesses.js";
 export { shellQuote } from "./shell.js";
+export { openCommandInNewTerminal, type TerminalLaunch } from "./terminal.js";
 export {
 	configureTellAgent,
 	defaultConfigPath,

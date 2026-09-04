@@ -11,8 +11,9 @@ A harness adapter converts its disk history to and from `Transcript` in
    The writer must support a caller-supplied session ID, path, and atomic
    overwrite so watchdog can refresh an inactive mirror without changing its
    resume command.
-3. Register the harness ID, label, command, roots, reader, writer, and resume
-   command in `src/harnesses.ts`.
+3. Implement the `HarnessAdapter` interface in `src/adapters/<harness>.ts`, then
+   add it to `HARNESS_ADAPTERS` in `src/adapters/index.ts`. Discovery, transfer,
+   sync, environment detection, and resume launching use this single registry.
 4. Add exact live-session evidence to `src/alive.ts`. Do not label a chat alive
    from modification time alone. Add conservative repository-level process
    protection when the harness does not expose its active session ID.

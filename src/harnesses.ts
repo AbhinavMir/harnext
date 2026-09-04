@@ -1,24 +1,15 @@
-/** Unified harness registry used by selection, sync, and watchdog. */
+/** Unified harness registry used by selection, sync, watchdog, and chat launching. */
 
 import { execFile } from "node:child_process";
 import { access, readdir, stat } from "node:fs/promises";
-import { homedir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { promisify } from "node:util";
+import { HARNESS_ADAPTERS, harnessAdapter, type HarnessId, type WriteChatOptions } from "./adapters/index.js";
 import type { Transcript } from "./ir.js";
-import { claudeProjectsRoot, findClaudeSessions, readClaudeSessionFile } from "./readers/claude-code.js";
-import { defaultCodexRoot, findCodexSessions, readCodexSessionFile } from "./readers/codex.js";
-import { defaultOmpSessionsRoot, findOmpSessions, readOmpSessionFile } from "./readers/omp.js";
-import { defaultPiSessionsRoot, findPiSessions, readPiSessionFile } from "./readers/pi.js";
-import { writeToClaudeCode } from "./writers/claude-code.js";
-import { writeToCodex } from "./writers/codex.js";
-import { writeToOmp } from "./writers/omp.js";
-import { shellQuote } from "./shell.js";
-import { writeToPi } from "./writers/pi.js";
 
 const exec = promisify(execFile);
 
-export type HarnessId = "claude" | "pi" | "omp" | "codex";
+export type { HarnessAdapter, HarnessId, WriteChatOptions } from "./adapters/index.js";
 
 export interface ChatInfo {
 	harness: HarnessId;
@@ -32,13 +23,6 @@ export interface ChatInfo {
 	alive?: boolean;
 }
 
-export interface WriteChatOptions {
-	path?: string;
-	sessionId?: string;
-	overwrite?: boolean;
-	name?: string;
-}
-
 export interface WrittenChat {
 	harness: HarnessId;
 	path: string;
@@ -46,14 +30,8 @@ export interface WrittenChat {
 	resumeCommand: string;
 }
 
-export const HARNESS_LABELS: Record<HarnessId, string> = {
-	claude: "Claude Code",
-	pi: "pi",
-	omp: "Oh My Pi",
-	codex: "Codex",
-};
-
-export const HARNESSES: HarnessId[] = ["claude", "pi", "omp", "codex"];
+export const HARNESSES: HarnessId[] = HARNESS_ADAPTERS.map((adapter) => adapter.id);
+export const HARNESS_LABELS = Object.fromEntries(HARNESS_ADAPTERS.map((adapter) => [adapter.id, adapter.label])) as Record<HarnessId, string>;
 
 function compactPrompt(transcript: Transcript): string | undefined {
 	const first = transcript.messages.find((message) => message.role === "user");
@@ -71,13 +49,8 @@ async function commandExists(command: string): Promise<boolean> {
 }
 
 export async function installedHarnesses(): Promise<HarnessId[]> {
-	const checks = await Promise.all([
-		commandExists("claude"),
-		commandExists("pi"),
-		commandExists("omp"),
-		commandExists("codex"),
-	]);
-	return HARNESSES.filter((_, index) => checks[index]);
+	const checks = await Promise.all(HARNESS_ADAPTERS.map((adapter) => commandExists(adapter.command)));
+	return HARNESS_ADAPTERS.filter((_, index) => checks[index]).map((adapter) => adapter.id);
 }
 
 async function walkJsonl(root: string): Promise<string[]> {
@@ -96,17 +69,12 @@ async function walkJsonl(root: string): Promise<string[]> {
 }
 
 export async function readChat(chat: Pick<ChatInfo, "harness" | "path">): Promise<Transcript> {
-	switch (chat.harness) {
-		case "claude": return readClaudeSessionFile(chat.path);
-		case "pi": return readPiSessionFile(chat.path);
-		case "omp": return readOmpSessionFile(chat.path);
-		case "codex": return readCodexSessionFile(chat.path);
-	}
+	return harnessAdapter(chat.harness).read(chat.path);
 }
 
 export async function inspectChat(harness: HarnessId, path: string): Promise<ChatInfo | undefined> {
 	try {
-		const transcript = await readChat({ harness, path });
+		const transcript = await harnessAdapter(harness).read(path);
 		if (transcript.cwd === "" || transcript.sessionId === path) return undefined;
 		const firstPrompt = compactPrompt(transcript);
 		return {
@@ -124,73 +92,30 @@ export async function inspectChat(harness: HarnessId, path: string): Promise<Cha
 
 export async function findRepoChats(cwd: string): Promise<ChatInfo[]> {
 	const absolute = resolve(cwd);
-	const [claude, pi, omp, codex] = await Promise.all([
-		findClaudeSessions(absolute),
-		findPiSessions(absolute),
-		findOmpSessions(absolute),
-		findCodexSessions(absolute),
-	]);
-	return [
-		...claude.map((chat) => ({ harness: "claude" as const, ...chat })),
-		...pi.map((chat) => ({ harness: "pi" as const, ...chat })),
-		...omp.map((chat) => ({ harness: "omp" as const, ...chat })),
-		...codex.map((chat) => ({ harness: "codex" as const, ...chat })),
-	].sort((a, b) => b.modifiedAt - a.modifiedAt);
+	const groups = await Promise.all(HARNESS_ADAPTERS.map(async (adapter) => (await adapter.findRepoChats(absolute)).map((chat) => ({ harness: adapter.id, ...chat }))));
+	return groups.flat().sort((a, b) => b.modifiedAt - a.modifiedAt);
 }
 
 export async function findAllChats(): Promise<ChatInfo[]> {
-	const roots: [HarnessId, string][] = [
-		["claude", claudeProjectsRoot()],
-		["pi", defaultPiSessionsRoot()],
-		["omp", defaultOmpSessionsRoot()],
-		["codex", join(defaultCodexRoot(), "sessions")],
-		["codex", join(defaultCodexRoot(), "archived_sessions")],
-	];
-	const groups = await Promise.all(roots.map(async ([harness, root]) => Promise.all((await walkJsonl(root)).map((path) => inspectChat(harness, path)))));
+	const groups = await Promise.all(HARNESS_ADAPTERS.flatMap((adapter) => adapter.storeRoots().map(async (root) => Promise.all((await walkJsonl(root)).map((path) => inspectChat(adapter.id, path))))));
 	return groups.flat().filter((chat): chat is ChatInfo => chat !== undefined).sort((a, b) => b.modifiedAt - a.modifiedAt);
 }
 
 export function resumeCommandFor(harness: HarnessId, sessionId: string, cwd: string): string {
-	const directory = shellQuote(cwd);
-	const id = shellQuote(harness === "pi" || harness === "omp" ? sessionId.slice(0, 8) : sessionId);
-	switch (harness) {
-		case "claude": return `cd ${directory} && claude --resume ${id}`;
-		case "pi": return `cd ${directory} && pi --session ${id}`;
-		case "omp": return `cd ${directory} && omp --resume ${id}`;
-		case "codex": return `cd ${directory} && codex resume ${id}`;
-	}
+	return harnessAdapter(harness).resumeCommand(sessionId, cwd);
 }
 
 export async function writeChat(target: HarnessId, transcript: Transcript, options: WriteChatOptions = {}): Promise<WrittenChat> {
-	switch (target) {
-		case "claude": {
-			const result = await writeToClaudeCode(transcript, { path: options.path, sessionId: options.sessionId, overwrite: options.overwrite, title: options.name });
-			return { harness: target, path: result.path, sessionId: result.sessionId, resumeCommand: resumeCommandFor(target, result.sessionId, transcript.cwd) };
-		}
-		case "pi": {
-			const result = await writeToPi(transcript, { path: options.path, sessionId: options.sessionId, overwrite: options.overwrite, name: options.name });
-			return { harness: target, path: result.path, sessionId: result.sessionId, resumeCommand: resumeCommandFor(target, result.sessionId, transcript.cwd) };
-		}
-		case "omp": {
-			const result = await writeToOmp(transcript, { path: options.path, sessionId: options.sessionId, overwrite: options.overwrite, name: options.name });
-			return { harness: target, path: result.path, sessionId: result.sessionId, resumeCommand: resumeCommandFor(target, result.sessionId, transcript.cwd) };
-		}
-		case "codex": {
-			const result = await writeToCodex(transcript, { path: options.path, sessionId: options.sessionId, overwrite: options.overwrite, title: options.name });
-			return { harness: target, path: result.path, sessionId: result.sessionId, resumeCommand: resumeCommandFor(target, result.sessionId, transcript.cwd) };
-		}
-	}
+	const adapter = harnessAdapter(target);
+	const result = await adapter.write(transcript, options);
+	return { harness: target, path: result.path, sessionId: result.sessionId, resumeCommand: adapter.resumeCommand(result.sessionId, transcript.cwd) };
 }
 
 export function currentChatFromEnvironment(): { harness: HarnessId; path?: string; sessionId?: string } | undefined {
-	const piFile = process.env.PI_SESSION_FILE;
-	if (piFile !== undefined && piFile !== "") return { harness: piFile.includes(`${join(homedir(), ".omp")}/`) ? "omp" : "pi", path: piFile, sessionId: process.env.PI_SESSION_ID };
-	const ompFile = process.env.OMP_SESSION_FILE;
-	if (ompFile !== undefined && ompFile !== "") return { harness: "omp", path: ompFile, sessionId: process.env.OMP_SESSION_ID };
-	const claudeId = process.env.CLAUDE_SESSION_ID;
-	if (claudeId !== undefined && claudeId !== "") return { harness: "claude", sessionId: claudeId };
-	const codexId = process.env.CODEX_THREAD_ID ?? process.env.CODEX_SESSION_ID;
-	if (codexId !== undefined && codexId !== "") return { harness: "codex", sessionId: codexId };
+	for (const adapter of HARNESS_ADAPTERS) {
+		const current = adapter.currentChat();
+		if (current !== undefined) return { harness: adapter.id, ...current };
+	}
 	return undefined;
 }
 
@@ -219,12 +144,7 @@ export function shortProject(cwd: string): string {
 
 export async function harnessStoreStatus(): Promise<{ harness: HarnessId; installed: boolean; root: string }[]> {
 	const installed = new Set(await installedHarnesses());
-	const rows: { harness: HarnessId; installed: boolean; root: string }[] = [
-		{ harness: "claude", installed: installed.has("claude"), root: claudeProjectsRoot() },
-		{ harness: "pi", installed: installed.has("pi"), root: defaultPiSessionsRoot() },
-		{ harness: "omp", installed: installed.has("omp"), root: defaultOmpSessionsRoot() },
-		{ harness: "codex", installed: installed.has("codex"), root: defaultCodexRoot() },
-	];
-	await Promise.all(rows.map(async (row) => { if (!row.installed && await exists(row.root)) row.installed = true; }));
+	const rows = HARNESS_ADAPTERS.map((adapter) => ({ harness: adapter.id, installed: installed.has(adapter.id), root: adapter.storeRoots()[0] ?? "" }));
+	await Promise.all(rows.map(async (row) => { if (!row.installed && row.root !== "" && await exists(row.root)) row.installed = true; }));
 	return rows;
 }

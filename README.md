@@ -12,7 +12,19 @@ npm i -g @buildingthefuture/harnext
 
 ![harnext HTML prompt-history export](https://raw.githubusercontent.com/AbhinavMir/harnext/main/docs/screenshots/prompt-export.png)
 
-## Choose any chat
+## Open any chat
+
+```
+harnext chats
+```
+
+`chats` collects Claude Code, pi, Oh My Pi, and Codex chats across the system
+into one newest-first list. Choose a chat to resume it in a new terminal window.
+Use `harnext chats alive` to show only sessions tied to a running process,
+terminal record, or current harness environment. In a pipe it prints the list;
+`--session <id>` selects a chat without the picker.
+
+## Transfer any chat
 
 Run harnext inside a repository:
 
@@ -21,20 +33,19 @@ cd your-project
 harnext
 ```
 
-It combines Claude Code, pi, Oh My Pi, and Codex chats for that repository into
-one newest-first numbered list. Choose a chat, then choose one destination or
-all installed harnesses. In a pipe or script it prints the list instead of
-waiting for input; use `--session <id> --to <harness|all>` for a non-interactive
-transfer.
+It combines supported chats for that repository into one newest-first numbered
+list. Choose a chat, then choose one destination or all installed harnesses. In
+a pipe or script it prints the list instead of waiting for input; use
+`--session <id> --to <harness|all>` for a non-interactive transfer.
 
 ```
 harnext all
 harnext all alive
 ```
 
-`all` lists chats across every repository. `all alive` includes only sessions
-that harnext can tie to a running process, terminal record, or current harness
-environment. It does not call a recently modified but closed chat alive.
+`all` prints chats across every repository without opening a picker. `all alive`
+uses the same conservative live-session check as `chats alive`; modification
+time alone does not make a chat alive.
 
 | Harness | Read | Write | Resume |
 | --- | --- | --- | --- |
@@ -278,8 +289,10 @@ console.log(result.path);
 ```
 
 The neutral `Transcript` type in `src/ir.ts` is the boundary between harnesses.
-A new harness needs one reader, one writer, and one registry entry rather than
-one converter per pair.
+Each harness implements the `HarnessAdapter` interface in `src/adapters/`, so
+discovery, transfer, sync, and resume launching share one registry. A new
+harness needs one reader, one writer, one adapter, and one registry entry rather
+than one converter per pair.
 
 ## Add another harness
 

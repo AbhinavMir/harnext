@@ -42,10 +42,11 @@ import {
 } from "./writers/claude-code.js";
 import { defaultStateRoot, runWatchdog, syncChat, type WatchdogEvent } from "./sync.js";
 import { configureTellAgent, defaultConfigPath, shouldTellAgent, withSwitchNotice, type TellAgentMode } from "./switch-notice.js";
+import { openCommandInNewTerminal } from "./terminal.js";
 import { DEFAULT_MAX_TOOL_OUTPUT_CHARS, toPiEntries, writeToPi } from "./writers/pi.js";
 
 type Direction = "claude-to-pi" | "pi-to-claude";
-type Operation = "browse" | "all" | "sync" | "watchdog" | "transfer" | "export" | "config";
+type Operation = "browse" | "chats" | "all" | "sync" | "watchdog" | "transfer" | "export" | "config";
 type ExportSource = HarnessId;
 
 interface Options {
@@ -85,6 +86,7 @@ const USAGE = `harnext - switch and sync coding-agent chats
 
 Usage:
   harnext [options]                  Choose any chat in this repo, then a destination
+  harnext chats [alive]              Choose any chat on this system and open it in a new terminal
   harnext all [alive]                List every chat, optionally only confirmed live chats
   harnext sync [options]             Copy the current chat into every installed harness
   harnext watchdog [options]         Keep one sync group current until stopped or conflicted
@@ -158,8 +160,8 @@ function parseArgs(argv: string[]): Options {
 	if (command === "export") {
 		options.operation = "export";
 		start = 1;
-	} else if (command === "all") {
-		options.operation = "all";
+	} else if (command === "chats" || command === "all") {
+		options.operation = command;
 		start = 1;
 		if (argv[1] === "alive") { options.alive = true; start = 2; }
 	} else if (command === "sync") {
@@ -489,10 +491,39 @@ async function runBrowse(options: Options): Promise<number> {
 	return 0;
 }
 
-async function runAllChats(options: Options): Promise<number> {
+async function allChats(options: Options): Promise<ChatInfo[]> {
 	let chats = await markAlive(await findAllChats());
 	if (options.alive) chats = chats.filter((chat) => chat.alive === true);
-	printChats(chats);
+	return chats;
+}
+
+async function runAllChats(options: Options): Promise<number> {
+	printChats(await allChats(options));
+	return 0;
+}
+
+async function runChats(options: Options): Promise<number> {
+	const chats = await allChats(options);
+	if (chats.length === 0) { printChats(chats); return 0; }
+	if (!process.stdin.isTTY && options.session === undefined) { printChats(chats); return 0; }
+	let chat: ChatInfo;
+	if (options.session !== undefined) {
+		const absolute = options.session.includes("/") ? resolve(options.session) : undefined;
+		const matches = chats.filter((candidate) => absolute === undefined ? candidate.sessionId.startsWith(options.session as string) : resolve(candidate.path) === absolute);
+		if (matches.length === 0) throw new Error(`No chat on this system matches ${options.session}`);
+		if (matches.length > 1) throw new Error(`Chat id ${options.session} is ambiguous across ${matches.length} harnesses`);
+		chat = matches[0] as ChatInfo;
+	} else {
+		chat = await choose("Open chat", chats.map((candidate) => ({ label: chatLine(candidate), value: candidate })));
+	}
+	const command = resumeCommandFor(chat.harness, chat.sessionId, chat.cwd);
+	if (options.dryRun) {
+		process.stdout.write(`${command}\n  nothing opened (--dry-run)\n`);
+		return 0;
+	}
+	if (!(await installedHarnesses()).includes(chat.harness)) throw new Error(`${HARNESS_LABELS[chat.harness]} is not installed`);
+	const launched = await openCommandInNewTerminal(command);
+	process.stdout.write(`Opened ${HARNESS_LABELS[chat.harness]} ${chat.sessionId.slice(0, 8)} in ${launched.terminal}.\n`);
 	return 0;
 }
 
@@ -541,6 +572,7 @@ async function run(argv: string[]): Promise<number> {
 	if (options.version) { process.stdout.write(`${await version()}\n`); return 0; }
 	if (options.operation === "export") return runExport(options);
 	if (options.operation === "browse") return runBrowse(options);
+	if (options.operation === "chats") return runChats(options);
 	if (options.operation === "all") return runAllChats(options);
 	if (options.operation === "sync") return runSyncCommand(options, false);
 	if (options.operation === "watchdog") return runSyncCommand(options, true);
