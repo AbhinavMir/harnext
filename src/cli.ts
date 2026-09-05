@@ -399,13 +399,54 @@ async function runExport(options: Options): Promise<number> {
 	return 0;
 }
 
-function chatLine(chat: ChatInfo, index?: number): string {
-	const when = new Date(chat.modifiedAt).toISOString().replace("T", " ").slice(0, 16);
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const PROJECT_WIDTH = 16;
+
+function whenLabel(ms: number): string {
+	const date = new Date(ms);
+	const two = (value: number): string => String(value).padStart(2, "0");
+	const day = `${MONTHS[date.getMonth()]} ${two(date.getDate())}`;
+	return date.getFullYear() === new Date().getFullYear() ? `${day} ${two(date.getHours())}:${two(date.getMinutes())}` : `${day} ${date.getFullYear()}`;
+}
+
+function chatTitle(chat: ChatInfo): string {
+	const raw = chat.title ?? chat.firstPrompt ?? "";
+	const command = /<command-name>([^<]*)<\/command-name>/.exec(raw);
+	const args = /<command-args>([^<]*)<\/command-args>/.exec(raw);
+	const text = (command === null ? raw.replace(/<[^>]+>/g, " ") : `${command[1] ?? ""} ${args?.[1] ?? ""}`).replace(/\s+/g, " ").trim();
+	const title = text === "" ? "(untitled)" : text;
+	return chat.archived === true ? `[archived] ${title}` : title;
+}
+
+function fit(text: string, width: number): string {
+	return text.length <= width ? text.padEnd(width) : `${text.slice(0, Math.max(0, width - 1))}…`;
+}
+
+interface ChatColumns { indexed: boolean; project: boolean; title: number }
+
+function chatColumns(chats: ChatInfo[], indexed: boolean): ChatColumns {
+	const project = new Set(chats.map((chat) => resolve(chat.cwd))).size > 1;
+	const fixed = (indexed ? 5 : 0) + 2 + 12 + 9 + 13 + (project ? PROJECT_WIDTH + 1 : 0);
+	const width = process.stdout.columns ?? 120;
+	return { indexed, project, title: Math.max(24, width - fixed - 1) };
+}
+
+function chatHeader(columns: ChatColumns): string {
+	const index = columns.indexed ? "  #  " : "";
+	const project = columns.project ? `${"project".padEnd(PROJECT_WIDTH)} ` : "";
+	return `${index}  ${"harness".padEnd(11)} ${"id".padEnd(8)} ${"modified".padEnd(12)} ${project}title`;
+}
+
+function chatLine(chat: ChatInfo, columns: ChatColumns, index?: number): string {
 	const number = index === undefined ? "" : `${String(index).padStart(3)}  `;
 	const live = chat.alive === true ? "●" : " ";
-	const archived = chat.archived === true ? " archived" : "";
-	const title = (chat.title ?? chat.firstPrompt ?? "(untitled)").replace(/\s+/g, " ").slice(0, 90);
-	return `${number}${live} ${HARNESS_LABELS[chat.harness].padEnd(11)} ${chat.sessionId.slice(0, 8)}  ${when}  ${shortProject(chat.cwd)}${archived}  ${title}`;
+	const project = columns.project ? `${fit(shortProject(chat.cwd), PROJECT_WIDTH)} ` : "";
+	return `${number}${live} ${HARNESS_LABELS[chat.harness].padEnd(11)} ${chat.sessionId.slice(0, 8)} ${whenLabel(chat.modifiedAt).padEnd(12)} ${project}${fit(chatTitle(chat), columns.title).trimEnd()}`;
+}
+
+function chatChoices(chats: ChatInfo[]): { choices: { label: string; value: ChatInfo }[]; header: string } {
+	const columns = chatColumns(chats, true);
+	return { choices: chats.map((chat) => ({ label: chatLine(chat, columns), value: chat })), header: chatHeader(columns) };
 }
 
 function printChats(chats: ChatInfo[], indexed = false): void {
@@ -413,11 +454,14 @@ function printChats(chats: ChatInfo[], indexed = false): void {
 		process.stdout.write("No matching chats.\n");
 		return;
 	}
-	for (const [offset, chat] of chats.entries()) process.stdout.write(`${chatLine(chat, indexed ? offset + 1 : undefined)}\n`);
+	const columns = chatColumns(chats, indexed);
+	if (process.stdout.isTTY) process.stdout.write(`${chatHeader(columns)}\n`);
+	for (const [offset, chat] of chats.entries()) process.stdout.write(`${chatLine(chat, columns, indexed ? offset + 1 : undefined)}\n`);
 }
 
-async function choose<T>(label: string, choices: { label: string; value: T }[]): Promise<T> {
+async function choose<T>(label: string, choices: { label: string; value: T }[], header?: string): Promise<T> {
 	if (!process.stdin.isTTY) throw new Error(`${label} needs an interactive terminal or an explicit option`);
+	if (header !== undefined) process.stdout.write(`${header}\n`);
 	for (const [offset, choice] of choices.entries()) process.stdout.write(`${String(offset + 1).padStart(3)}  ${choice.label}\n`);
 	const readline = createInterface({ input: process.stdin, output: process.stdout });
 	try {
@@ -445,7 +489,8 @@ async function selectedRepoChat(options: Options, preferCurrent: boolean): Promi
 		if (current !== undefined) return current;
 	}
 	if (!process.stdin.isTTY) return chats[0] as ChatInfo;
-	return choose("Choose chat", chats.map((chat) => ({ label: chatLine(chat), value: chat })));
+	const listed = chatChoices(chats);
+	return choose("Choose chat", listed.choices, listed.header);
 }
 
 async function reportSync(result: Awaited<ReturnType<typeof syncChat>>): Promise<void> {
@@ -463,7 +508,10 @@ async function runBrowse(options: Options): Promise<number> {
 	let source: ChatInfo;
 	if (options.session !== undefined) source = await selectedRepoChat(options, false);
 	else if (!process.stdin.isTTY) source = chats[0] as ChatInfo;
-	else source = await choose("Choose chat", chats.map((chat) => ({ label: chatLine(chat), value: chat })));
+	else {
+		const listed = chatChoices(chats);
+		source = await choose("Choose chat", listed.choices, listed.header);
+	}
 	const installed = (await installedHarnesses()).filter((harness) => harness !== source.harness);
 	if (installed.length === 0) throw new Error("No other supported harness is installed");
 	const target = options.to ?? await choose<HarnessId | "all">("Copy to", [
@@ -514,7 +562,8 @@ async function runChats(options: Options): Promise<number> {
 		if (matches.length > 1) throw new Error(`Chat id ${options.session} is ambiguous across ${matches.length} harnesses`);
 		chat = matches[0] as ChatInfo;
 	} else {
-		chat = await choose("Open chat", chats.map((candidate) => ({ label: chatLine(candidate), value: candidate })));
+		const listed = chatChoices(chats);
+		chat = await choose("Open chat", listed.choices, listed.header);
 	}
 	const command = resumeCommandFor(chat.harness, chat.sessionId, chat.cwd);
 	if (options.dryRun) {
