@@ -113,6 +113,18 @@ export {
 	type HarnessId,
 } from "./harnesses.js";
 export { shellQuote } from "./shell.js";
+export {
+	buildDirectorPrompt,
+	parseVerdict,
+	runGoalLoop,
+	type GoalExchange,
+	type GoalLoopDeps,
+	type GoalLoopOptions,
+	type GoalResult,
+	type GoalRoundEvent,
+	type GoalVerdict,
+} from "./goal.js";
+export { type HeadlessOptions, type HeadlessSpec } from "./adapters/index.js";
 export { openCommandInNewTerminal, type TerminalLaunch } from "./terminal.js";
 export {
 	configureTellAgent,

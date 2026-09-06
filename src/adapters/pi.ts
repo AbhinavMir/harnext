@@ -31,4 +31,10 @@ export const piAdapter: HarnessAdapter = {
 	sessionProcessMatches(command, sessionId) {
 		return this.processMatches(command) && (command.includes(`--session ${sessionId}`) || command.includes(`--session ${sessionId.slice(0, 8)}`));
 	},
+	headless(prompt, options) {
+		const base = options.sessionId === undefined
+			? ["-p", prompt, "--no-session", "--thinking", "off"]
+			: ["-p", prompt, "--session", options.sessionId];
+		return { command: "pi", args: base };
+	},
 };

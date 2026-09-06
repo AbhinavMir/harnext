@@ -27,4 +27,10 @@ export const claudeAdapter: HarnessAdapter = {
 	sessionProcessMatches(command, sessionId) {
 		return this.processMatches(command) && (command.includes(`--session-id ${sessionId}`) || command.includes(`--resume ${sessionId}`));
 	},
+	headless(prompt, options) {
+		const base = options.sessionId === undefined
+			? ["-p", prompt, "--output-format", "text"]
+			: ["--resume", options.sessionId, "-p", prompt, "--output-format", "text"];
+		return { command: "claude", args: options.yolo === true ? [...base, "--dangerously-skip-permissions"] : base };
+	},
 };

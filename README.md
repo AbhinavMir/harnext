@@ -85,6 +85,29 @@ harnext config --tell-agent never
 The default is `ask`. Non-interactive transfers treat `ask` as no; set `always`
 when scripts should add the notice.
 
+## Goal loop
+
+```
+harnext goal "all tests pass and the build is clean" --yolo
+harnext goal "ship the CSV export" --judge claude --max-rounds 20
+```
+
+`goal` runs a director agent that drives a worker chat until the goal is
+verifiably reached. The worker is a chat in this repository; harnext picks the
+current chat, or use `--session <id>` to choose one. Each round the director
+reads the worker's own output, decides if the goal is met, and sends the next
+instruction if it is not.
+
+The director stops only on a verified done verdict. It requires concrete
+evidence in the worker's reply, such as a passing test or a command result.
+`--max-rounds` is a safety cap, not a success signal. harnext reaches the cap
+and reports `GOAL NOT REACHED`. It never calls an unfinished goal done.
+
+The director runs on the worker's harness by default; `--judge <harness>` runs
+it on another. Both harnesses must be installed. The worker runs its harness in
+non-interactive mode. Add `--yolo` to let the worker use tools without approval
+prompts, which an autonomous loop needs.
+
 ## Sync
 
 ```

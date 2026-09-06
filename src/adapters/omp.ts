@@ -63,4 +63,10 @@ export const ompAdapter: HarnessAdapter = {
 		}
 		return { paths };
 	},
+	headless(prompt, options) {
+		const base = options.sessionId === undefined
+			? ["-p", prompt, "--no-session"]
+			: ["-p", prompt, "--resume", options.sessionId];
+		return { command: "omp", args: base };
+	},
 };

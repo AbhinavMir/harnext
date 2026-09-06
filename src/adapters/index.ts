@@ -13,4 +13,4 @@ export function harnessAdapter(id: HarnessId): HarnessAdapter {
 	return adapter;
 }
 
-export type { ActiveChatEvidence, AdapterWriteResult, CurrentHarnessChat, HarnessAdapter, HarnessId, HarnessSessionInfo, WriteChatOptions } from "./types.js";
+export type { ActiveChatEvidence, AdapterWriteResult, CurrentHarnessChat, HarnessAdapter, HarnessId, HarnessSessionInfo, HeadlessOptions, HeadlessSpec, WriteChatOptions } from "./types.js";

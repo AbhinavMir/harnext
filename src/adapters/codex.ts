@@ -38,4 +38,10 @@ export const codexAdapter: HarnessAdapter = {
 		for (const name of names) if (name.endsWith(".lock") && name !== ".coordination.lock") sessionIds.push(name.slice(0, -5));
 		return { sessionIds };
 	},
+	headless(prompt, options) {
+		const base = options.sessionId === undefined
+			? ["exec", "--skip-git-repo-check", "--color", "never", prompt]
+			: ["exec", "resume", options.sessionId, "--color", "never", prompt];
+		return { command: "codex", args: options.yolo === true ? [...base, "--dangerously-bypass-approvals-and-sandbox"] : base };
+	},
 };

@@ -13,7 +13,10 @@ A harness adapter converts its disk history to and from `Transcript` in
    resume command.
 3. Implement the `HarnessAdapter` interface in `src/adapters/<harness>.ts`, then
    add it to `HARNESS_ADAPTERS` in `src/adapters/index.ts`. Discovery, transfer,
-   sync, environment detection, and resume launching use this single registry.
+   sync, environment detection, resume launching, and the goal loop use this
+   single registry. The `headless` method returns the argv that runs one prompt
+   non-interactively, both to resume the worker session and to run a fresh
+   director. Pass the prompt as one argv element, never through a shell string.
 4. Add exact live-session evidence to `src/alive.ts`. Do not label a chat alive
    from modification time alone. Add conservative repository-level process
    protection when the harness does not expose its active session ID.

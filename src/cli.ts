@@ -23,6 +23,9 @@ import {
 	type ChatInfo,
 	type HarnessId,
 } from "./harnesses.js";
+import { harnessAdapter } from "./adapters/index.js";
+import { runGoalLoop, type GoalRoundEvent } from "./goal.js";
+import { execFile } from "node:child_process";
 import { postToHypertext, type HypertextExpiry } from "./hypertext.js";
 import type { Transcript } from "./ir.js";
 import {
@@ -46,7 +49,7 @@ import { openCommandInNewTerminal } from "./terminal.js";
 import { DEFAULT_MAX_TOOL_OUTPUT_CHARS, toPiEntries, writeToPi } from "./writers/pi.js";
 
 type Direction = "claude-to-pi" | "pi-to-claude";
-type Operation = "browse" | "chats" | "all" | "sync" | "watchdog" | "transfer" | "export" | "config";
+type Operation = "browse" | "chats" | "all" | "sync" | "watchdog" | "transfer" | "export" | "config" | "goal";
 type ExportSource = HarnessId;
 
 interface Options {
@@ -80,6 +83,10 @@ interface Options {
 	to?: HarnessId | "all";
 	intervalMs: number;
 	tellAgentMode?: TellAgentMode;
+	goal?: string;
+	judge?: HarnessId;
+	maxRounds: number;
+	yolo: boolean;
 }
 
 const USAGE = `harnext - switch and sync coding-agent chats
@@ -91,6 +98,7 @@ Usage:
   harnext sync [options]             Copy the current chat into every installed harness
   harnext watchdog [options]         Keep one sync group current until stopped or conflicted
   harnext config                     Configure the receiving-agent switch notice
+  harnext goal "<goal>" [options]    Direct a worker chat until the goal is verifiably reached
   harnext claude-to-pi [options]     Explicit Claude Code to pi transfer
   harnext pi-to-claude [options]     Explicit pi to Claude Code transfer
   harnext export [options]           Export user prompt history
@@ -102,6 +110,12 @@ Selection and sync options:
   --session <path|id>             Select a source session by path or id prefix
   --interval <milliseconds>       Watchdog scan interval (default: 1500)
   --tell-agent <ask|always|never>  Set switch-notice behavior with harnext config
+
+Goal options:
+  --goal <goal>                   The goal, instead of the positional argument
+  --judge <harness>               Harness that runs the director (default: the worker's harness)
+  --max-rounds <n>                Safety cap on director rounds (default: 12)
+  --yolo                          Let the worker run tools without approval prompts
 
 Export options:
   --from <harness>                Source harness (default: claude)
@@ -153,6 +167,8 @@ function parseArgs(argv: string[]): Options {
 		version: false,
 		alive: false,
 		intervalMs: 1500,
+		maxRounds: 12,
+		yolo: false,
 	};
 
 	let start = 0;
@@ -173,6 +189,10 @@ function parseArgs(argv: string[]): Options {
 	} else if (command === "config") {
 		options.operation = "config";
 		start = 1;
+	} else if (command === "goal") {
+		options.operation = "goal";
+		start = 1;
+		if (argv[1] !== undefined && !argv[1].startsWith("-")) { options.goal = argv[1]; start = 2; }
 	} else if (command === "claude-to-pi" || command === "to-pi") {
 		options.operation = "transfer";
 		options.direction = "claude-to-pi";
@@ -216,6 +236,20 @@ function parseArgs(argv: string[]): Options {
 				options.tellAgentMode = value;
 				break;
 			}
+			case "--goal": options.goal = next(); break;
+			case "--judge": {
+				const value = next();
+				if (!HARNESSES.includes(value as HarnessId)) throw new Error("--judge must be claude, pi, omp, or codex");
+				options.judge = value as HarnessId;
+				break;
+			}
+			case "--max-rounds": {
+				const value = Number.parseInt(next(), 10);
+				if (!Number.isSafeInteger(value) || value < 1) throw new Error("--max-rounds must be a positive integer");
+				options.maxRounds = value;
+				break;
+			}
+			case "--yolo": options.yolo = true; break;
 			case "--mode": {
 				const value = next();
 				if (value !== "raw" && value !== "smart") throw new Error("--mode must be raw or smart");
@@ -581,6 +615,48 @@ function watchdogMessage(event: WatchdogEvent): void {
 	if (event.type === "waiting") process.stdout.write(`${new Date().toISOString()}  waiting: ${event.targets?.map((target) => HARNESS_LABELS[target.harness]).join(", ")} is open\n`);
 }
 
+function runHeadless(spec: { command: string; args: string[]; input?: string }, cwd: string): Promise<string> {
+	return new Promise((resolve) => {
+		const child = execFile(spec.command, spec.args, { cwd, maxBuffer: 64 * 1024 * 1024, timeout: 900_000 }, (error, stdout, stderr) => {
+			const combined = `${stdout ?? ""}${stderr ? `\n${stderr}` : ""}`.trim();
+			resolve(combined === "" && error !== null ? `[harnext] ${spec.command} exited without output: ${error.message}` : combined);
+		});
+		if (spec.input !== undefined) child.stdin?.end(spec.input);
+	});
+}
+
+async function runGoal(options: Options): Promise<number> {
+	const goal = options.goal;
+	if (goal === undefined || goal.trim() === "") throw new Error(`Provide the goal: harnext goal "<goal>" or --goal <goal>`);
+	const worker = await selectedRepoChat(options, true);
+	const workerAdapter = harnessAdapter(worker.harness);
+	const directorAdapter = options.judge === undefined ? workerAdapter : harnessAdapter(options.judge);
+	const installed = new Set(await installedHarnesses());
+	if (!installed.has(workerAdapter.id)) throw new Error(`${HARNESS_LABELS[workerAdapter.id]} is not installed; it runs the worker session`);
+	if (!installed.has(directorAdapter.id)) throw new Error(`${HARNESS_LABELS[directorAdapter.id]} is not installed; it runs the director`);
+
+	process.stderr.write(`Goal loop: ${HARNESS_LABELS[directorAdapter.id]} directs ${HARNESS_LABELS[worker.harness]} ${worker.sessionId.slice(0, 8)} in ${shortProject(worker.cwd)}.\n`);
+	process.stderr.write(`Goal: ${goal.trim()}\n`);
+	if (!options.yolo) process.stderr.write("Worker runs without --yolo, so tool approvals can stall it. Add --yolo to let it act on its own.\n");
+
+	const onEvent = (event: GoalRoundEvent): void => {
+		if (event.phase !== "verdict") return;
+		process.stderr.write(`\nRound ${event.round} [${event.done ? "reached" : "continue"}]: ${event.reason}\n`);
+		if (!event.done && event.instruction !== undefined) process.stderr.write(`  -> ${event.instruction.replace(/\s+/g, " ").slice(0, 200)}\n`);
+	};
+
+	const result = await runGoalLoop({ goal, maxRounds: options.maxRounds }, {
+		director: (prompt) => runHeadless(directorAdapter.headless(prompt, { cwd: worker.cwd }), worker.cwd),
+		worker: (instruction) => runHeadless(workerAdapter.headless(instruction, { cwd: worker.cwd, sessionId: worker.sessionId, yolo: options.yolo }), worker.cwd),
+		onEvent,
+	});
+
+	process.stdout.write(`\n${result.reached ? "GOAL REACHED" : "GOAL NOT REACHED"} after ${result.rounds} round(s).\n`);
+	process.stdout.write(`${result.reason}\n`);
+	process.stdout.write(`Resume the worker: ${resumeCommandFor(worker.harness, worker.sessionId, worker.cwd)}\n`);
+	return result.reached ? 0 : 1;
+}
+
 async function runConfig(options: Options): Promise<number> {
 	const config = await configureTellAgent(options.tellAgentMode);
 	process.stdout.write(`Tell receiving agent: ${config.tellAgent}\nConfig: ${defaultConfigPath()}\n`);
@@ -626,6 +702,7 @@ async function run(argv: string[]): Promise<number> {
 	if (options.operation === "sync") return runSyncCommand(options, false);
 	if (options.operation === "watchdog") return runSyncCommand(options, true);
 	if (options.operation === "config") return runConfig(options);
+	if (options.operation === "goal") return runGoal(options);
 	if (options.list) { await listSource(options); return 0; }
 
 	if (options.direction === "claude-to-pi") {

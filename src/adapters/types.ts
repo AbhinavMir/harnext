@@ -36,6 +36,18 @@ export interface ActiveChatEvidence {
 	sessionIds?: string[];
 }
 
+export interface HeadlessOptions {
+	cwd: string;
+	sessionId?: string;
+	yolo?: boolean;
+}
+
+export interface HeadlessSpec {
+	command: string;
+	args: string[];
+	input?: string;
+}
+
 export interface HarnessAdapter {
 	id: HarnessId;
 	label: string;
@@ -49,4 +61,5 @@ export interface HarnessAdapter {
 	processMatches(command: string): boolean;
 	sessionProcessMatches(command: string, sessionId: string): boolean;
 	activeChats?(processCommands: string[]): Promise<ActiveChatEvidence>;
+	headless(prompt: string, options: HeadlessOptions): HeadlessSpec;
 }
