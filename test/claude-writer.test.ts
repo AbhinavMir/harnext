@@ -56,6 +56,28 @@ describe("toClaudeRecords", () => {
 		expect(user.message.content.find((block) => block.type === "tool_result")?.tool_use_id).toBe(id);
 	});
 
+	it("records a Claude model so resume does not reject a foreign id", () => {
+		const foreign: Transcript = {
+			source: "pi",
+			sessionId: "pi-1",
+			cwd: "/tmp/project",
+			createdAt: 1_700_000_000_000,
+			model: { provider: "openai-codex", id: "gpt-6-astra" },
+			messages: [
+				{ role: "assistant", ts: 1, blocks: [{ kind: "text", text: "one" }], model: "gpt-5.6-sol" },
+				{ role: "assistant", ts: 2, blocks: [{ kind: "text", text: "two" }], model: "<synthetic>" },
+				{ role: "assistant", ts: 3, blocks: [{ kind: "text", text: "three" }], model: "claude-opus-5" },
+			],
+			notes: [],
+		};
+		const { records } = toClaudeRecords(foreign, {}, "claude-1");
+		const models = records
+			.filter((record) => record.type === "assistant")
+			.map((record) => (record as { message: { model: string } }).message.model);
+		expect(models).toEqual(["claude-sonnet-4-6", "claude-sonnet-4-6", "claude-opus-5"]);
+		for (const model of models) expect(model).toMatch(/^claude-/);
+	});
+
 	it("degrades a pi-only tool call with its result", () => {
 		const { records, stats } = toClaudeRecords(transcript([
 			{ role: "assistant", ts: 1, blocks: [{ kind: "toolCall", id: "c1", name: "agent_send", arguments: { to: "peer" } }] },

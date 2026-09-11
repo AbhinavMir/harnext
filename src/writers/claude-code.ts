@@ -88,6 +88,16 @@ function iso(ts: number): string {
 	return new Date(Number.isFinite(ts) ? ts : Date.now()).toISOString();
 }
 
+const DEFAULT_CLAUDE_MODEL = "claude-sonnet-4-6";
+
+// Claude Code refuses to restore a session whose recorded model is not one it
+// knows. A transcript imported from another harness carries that harness's
+// model id (gpt-6-astra, <synthetic>), so anything that is not a Claude model
+// becomes the default Claude model instead.
+function claudeModel(id: string | undefined): string {
+	return id !== undefined && id.startsWith("claude-") ? id : DEFAULT_CLAUDE_MODEL;
+}
+
 /** Build the exact record stream written to a Claude Code project JSONL file. */
 export function toClaudeRecords(
 	transcript: Transcript,
@@ -215,7 +225,7 @@ export function toClaudeRecords(
 				id: messageId(),
 				type: "message",
 				role: "assistant",
-				model: message.model ?? transcript.model?.id ?? "claude-sonnet-4-6",
+				model: claudeModel(message.model ?? transcript.model?.id),
 				content: assistantContent,
 				stop_reason: hasToolUse ? "tool_use" : "end_turn",
 				stop_sequence: null,
