@@ -101,6 +101,78 @@ export async function findAllChats(): Promise<ChatInfo[]> {
 	return groups.flat().filter((chat): chat is ChatInfo => chat !== undefined).sort((a, b) => b.modifiedAt - a.modifiedAt);
 }
 
+export interface ChatSearchHit extends ChatInfo {
+	/** How many times the term occurs across the whole transcript. */
+	matchCount: number;
+	/** Text around the first occurrence, for context in the result list. */
+	snippet: string;
+}
+
+/** Every searchable string in a transcript: title, prompts, replies, reasoning, tool calls and their output. */
+function searchableParts(transcript: Transcript): string[] {
+	const parts: string[] = [];
+	if (transcript.title !== undefined) parts.push(transcript.title);
+	for (const message of transcript.messages) {
+		if (message.role === "meta") { parts.push(message.text); continue; }
+		for (const block of message.blocks) {
+			if (block.kind === "text" || block.kind === "thinking") parts.push(block.text);
+			else if (block.kind === "toolCall") parts.push(`${block.name} ${JSON.stringify(block.arguments)}`);
+		}
+	}
+	return parts;
+}
+
+function snippetAround(text: string, lowerText: string, needle: string): string {
+	const at = lowerText.indexOf(needle);
+	const start = Math.max(0, at - 40);
+	const slice = text.slice(start, at + needle.length + 40).replace(/\s+/g, " ").trim();
+	return `${start > 0 ? "…" : ""}${slice}${at + needle.length + 40 < text.length ? "…" : ""}`;
+}
+
+/** Count occurrences of a lowercased term across a transcript and grab the first snippet. */
+export function searchTranscript(transcript: Transcript, needle: string): { matchCount: number; snippet: string } | undefined {
+	if (needle === "") return undefined;
+	let matchCount = 0;
+	let snippet = "";
+	for (const part of searchableParts(transcript)) {
+		const lower = part.toLowerCase();
+		for (let at = lower.indexOf(needle); at !== -1; at = lower.indexOf(needle, at + needle.length)) matchCount += 1;
+		if (snippet === "" && lower.includes(needle)) snippet = snippetAround(part, lower, needle);
+	}
+	return matchCount === 0 ? undefined : { matchCount, snippet };
+}
+
+async function searchChat(harness: HarnessId, path: string, needle: string): Promise<ChatSearchHit | undefined> {
+	try {
+		const transcript = await harnessAdapter(harness).read(path);
+		if (transcript.cwd === "" || transcript.sessionId === path) return undefined;
+		const match = searchTranscript(transcript, needle);
+		if (match === undefined) return undefined;
+		const { matchCount, snippet } = match;
+		const firstPrompt = compactPrompt(transcript);
+		return {
+			harness,
+			path,
+			sessionId: transcript.sessionId,
+			cwd: transcript.cwd,
+			modifiedAt: (await stat(path)).mtimeMs,
+			matchCount,
+			snippet,
+			...(transcript.title === undefined ? {} : { title: transcript.title }),
+			...(firstPrompt === undefined ? {} : { firstPrompt }),
+			...(path.includes("/archived_sessions/") ? { archived: true } : {}),
+		};
+	} catch { return undefined; }
+}
+
+/** Search every chat in every installed harness store for a term (case-insensitive). */
+export async function searchAllChats(term: string): Promise<ChatSearchHit[]> {
+	const needle = term.toLowerCase();
+	if (needle === "") return [];
+	const groups = await Promise.all(HARNESS_ADAPTERS.flatMap((adapter) => adapter.storeRoots().map(async (root) => Promise.all((await walkJsonl(root)).map((path) => searchChat(adapter.id, path, needle))))));
+	return groups.flat().filter((hit): hit is ChatSearchHit => hit !== undefined).sort((a, b) => b.modifiedAt - a.modifiedAt);
+}
+
 export function resumeCommandFor(harness: HarnessId, sessionId: string, cwd: string): string {
 	return harnessAdapter(harness).resumeCommand(sessionId, cwd);
 }

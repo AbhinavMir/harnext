@@ -18,9 +18,11 @@ import {
 	readChat,
 	resolveCurrentChat,
 	resumeCommandFor,
+	searchAllChats,
 	shortProject,
 	writeChat,
 	type ChatInfo,
+	type ChatSearchHit,
 	type HarnessId,
 } from "./harnesses.js";
 import { harnessAdapter } from "./adapters/index.js";
@@ -49,7 +51,7 @@ import { openCommandInNewTerminal } from "./terminal.js";
 import { DEFAULT_MAX_TOOL_OUTPUT_CHARS, toPiEntries, writeToPi } from "./writers/pi.js";
 
 type Direction = "claude-to-pi" | "pi-to-claude";
-type Operation = "browse" | "chats" | "all" | "sync" | "watchdog" | "transfer" | "export" | "config" | "goal";
+type Operation = "browse" | "chats" | "all" | "search" | "sync" | "watchdog" | "transfer" | "export" | "config" | "goal";
 type ExportSource = HarnessId;
 
 interface Options {
@@ -87,6 +89,7 @@ interface Options {
 	judge?: HarnessId;
 	maxRounds: number;
 	yolo: boolean;
+	query?: string;
 }
 
 const USAGE = `harnext - switch and sync coding-agent chats
@@ -95,6 +98,7 @@ Usage:
   harnext [options]                  Choose any chat in this repo, then a destination
   harnext chats [alive]              Choose any chat on this system and open it in a new terminal
   harnext all [alive]                List every chat, optionally only confirmed live chats
+  harnext search "<term>" [alive]    Find every chat that mentions the term, then open one
   harnext sync [options]             Copy the current chat into every installed harness
   harnext watchdog [options]         Keep one sync group current until stopped or conflicted
   harnext config                     Configure the receiving-agent switch notice
@@ -180,6 +184,11 @@ function parseArgs(argv: string[]): Options {
 		options.operation = command;
 		start = 1;
 		if (argv[1] === "alive") { options.alive = true; start = 2; }
+	} else if (command === "search") {
+		options.operation = "search";
+		start = 1;
+		if (argv[1] !== undefined && !argv[1].startsWith("-")) { options.query = argv[1]; start = 2; }
+		if (argv[start] === "alive") { options.alive = true; start += 1; }
 	} else if (command === "sync") {
 		options.operation = "sync";
 		start = 1;
@@ -599,8 +608,12 @@ async function runChats(options: Options): Promise<number> {
 		const listed = chatChoices(chats);
 		chat = await choose("Open chat", listed.choices, listed.header);
 	}
+	return openChat(chat, options.dryRun);
+}
+
+async function openChat(chat: ChatInfo, dryRun: boolean): Promise<number> {
 	const command = resumeCommandFor(chat.harness, chat.sessionId, chat.cwd);
-	if (options.dryRun) {
+	if (dryRun) {
 		process.stdout.write(`${command}\n  nothing opened (--dry-run)\n`);
 		return 0;
 	}
@@ -608,6 +621,39 @@ async function runChats(options: Options): Promise<number> {
 	const launched = await openCommandInNewTerminal(command);
 	process.stdout.write(`Opened ${HARNESS_LABELS[chat.harness]} ${chat.sessionId.slice(0, 8)} in ${launched.terminal}.\n`);
 	return 0;
+}
+
+function searchChoices(hits: ChatSearchHit[]): { choices: { label: string; value: ChatSearchHit }[]; header: string } {
+	const columns = chatColumns(hits, true);
+	return {
+		choices: hits.map((hit) => ({ label: `${chatLine(hit, columns)}\n       ⌕ ${String(hit.matchCount).padStart(3)}  ${hit.snippet}`, value: hit })),
+		header: chatHeader(columns),
+	};
+}
+
+function printSearchHits(hits: ChatSearchHit[]): void {
+	if (hits.length === 0) { process.stdout.write("No chats mention that term.\n"); return; }
+	const columns = chatColumns(hits, false);
+	if (process.stdout.isTTY) process.stdout.write(`${chatHeader(columns)}\n`);
+	for (const hit of hits) process.stdout.write(`${chatLine(hit, columns)}\n       ⌕ ${String(hit.matchCount).padStart(3)}  ${hit.snippet}\n`);
+}
+
+async function runSearch(options: Options): Promise<number> {
+	if (options.query === undefined || options.query === "") throw new Error('search needs a term, for example: harnext search "auth bug"');
+	let hits = await searchAllChats(options.query);
+	if (options.alive) hits = (await markAlive(hits)).filter((hit): hit is ChatSearchHit => hit.alive === true);
+	if (hits.length === 0) { printSearchHits(hits); return 0; }
+	if (options.session !== undefined) {
+		const absolute = options.session.includes("/") ? resolve(options.session) : undefined;
+		const matches = hits.filter((hit) => absolute === undefined ? hit.sessionId.startsWith(options.session as string) : resolve(hit.path) === absolute);
+		if (matches.length === 0) throw new Error(`No matching chat has id ${options.session}`);
+		if (matches.length > 1) throw new Error(`Chat id ${options.session} is ambiguous across ${matches.length} chats`);
+		return openChat(matches[0] as ChatSearchHit, options.dryRun);
+	}
+	if (!process.stdin.isTTY) { printSearchHits(hits); return 0; }
+	const listed = searchChoices(hits);
+	const chat = await choose(`Open chat matching "${options.query}"`, listed.choices, listed.header);
+	return openChat(chat, options.dryRun);
 }
 
 function watchdogMessage(event: WatchdogEvent): void {
@@ -699,6 +745,7 @@ async function run(argv: string[]): Promise<number> {
 	if (options.operation === "browse") return runBrowse(options);
 	if (options.operation === "chats") return runChats(options);
 	if (options.operation === "all") return runAllChats(options);
+	if (options.operation === "search") return runSearch(options);
 	if (options.operation === "sync") return runSyncCommand(options, false);
 	if (options.operation === "watchdog") return runSyncCommand(options, true);
 	if (options.operation === "config") return runConfig(options);
