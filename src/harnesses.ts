@@ -166,11 +166,21 @@ async function searchChat(harness: HarnessId, path: string, needle: string): Pro
 }
 
 /** Search every chat in every installed harness store for a term (case-insensitive). */
-export async function searchAllChats(term: string): Promise<ChatSearchHit[]> {
+export async function searchAllChats(term: string, onProgress?: (done: number, total: number) => void): Promise<ChatSearchHit[]> {
 	const needle = term.toLowerCase();
 	if (needle === "") return [];
-	const groups = await Promise.all(HARNESS_ADAPTERS.flatMap((adapter) => adapter.storeRoots().map(async (root) => Promise.all((await walkJsonl(root)).map((path) => searchChat(adapter.id, path, needle))))));
-	return groups.flat().filter((hit): hit is ChatSearchHit => hit !== undefined).sort((a, b) => b.modifiedAt - a.modifiedAt);
+	const targetGroups = await Promise.all(HARNESS_ADAPTERS.flatMap((adapter) => adapter.storeRoots().map(async (root) => (await walkJsonl(root)).map((path) => ({ harness: adapter.id, path })))));
+	const targets = targetGroups.flat();
+	const total = targets.length;
+	let done = 0;
+	onProgress?.(0, total);
+	const hits = await Promise.all(targets.map(async ({ harness, path }) => {
+		const hit = await searchChat(harness, path, needle);
+		done += 1;
+		onProgress?.(done, total);
+		return hit;
+	}));
+	return hits.filter((hit): hit is ChatSearchHit => hit !== undefined).sort((a, b) => b.matchCount - a.matchCount || b.modifiedAt - a.modifiedAt);
 }
 
 export function resumeCommandFor(harness: HarnessId, sessionId: string, cwd: string): string {

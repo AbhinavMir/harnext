@@ -465,6 +465,52 @@ function fit(text: string, width: number): string {
 	return text.length <= width ? text.padEnd(width) : `${text.slice(0, Math.max(0, width - 1))}…`;
 }
 
+const useColor = process.stdout.isTTY === true && process.env.NO_COLOR === undefined;
+const paint = (open: string, close: string) => (text: string): string => useColor ? `${open}${text}${close}` : text;
+const ansi = {
+	dim: paint("\x1b[2m", "\x1b[22m"),
+	bold: paint("\x1b[1m", "\x1b[22m"),
+	cyan: paint("\x1b[36m", "\x1b[39m"),
+	green: paint("\x1b[32m", "\x1b[39m"),
+	yellow: paint("\x1b[33m", "\x1b[39m"),
+};
+
+/** Reverse-video the matched term everywhere it appears in a snippet. */
+function highlight(text: string, term: string): string {
+	if (!useColor || term === "") return text;
+	const lower = text.toLowerCase();
+	const needle = term.toLowerCase();
+	let out = "";
+	let from = 0;
+	for (let at = lower.indexOf(needle); at !== -1; at = lower.indexOf(needle, at + needle.length)) {
+		out += text.slice(from, at) + `\x1b[7m${text.slice(at, at + needle.length)}\x1b[27m`;
+		from = at + needle.length;
+	}
+	return out + text.slice(from);
+}
+
+/** A stderr spinner that reports search progress without polluting stdout. */
+function startSearchProgress(term: string): { update: (done: number, total: number) => void; finish: (found: number) => void } {
+	if (process.stderr.isTTY !== true || process.env.NO_COLOR !== undefined) {
+		process.stderr.write(`Searching every chat for "${term}"...\n`);
+		return { update: () => {}, finish: () => {} };
+	}
+	const frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+	let frame = 0;
+	let label = `scanning chats for "${term}"...`;
+	const timer = setInterval(() => {
+		frame = (frame + 1) % frames.length;
+		process.stderr.write(`\r\x1b[2K${ansi.cyan(frames[frame] as string)} ${label}`);
+	}, 80);
+	return {
+		update: (done, total) => { label = `scanned ${done}/${total} chats for "${term}"...`; },
+		finish: (found) => {
+			clearInterval(timer);
+			process.stderr.write(`\r\x1b[2K${ansi.green("✓")} ${found} ${found === 1 ? "chat" : "chats"} mention "${term}"\n`);
+		},
+	};
+}
+
 interface ChatColumns { indexed: boolean; project: boolean; title: number }
 
 function chatColumns(chats: ChatInfo[], indexed: boolean): ChatColumns {
@@ -623,26 +669,54 @@ async function openChat(chat: ChatInfo, dryRun: boolean): Promise<number> {
 	return 0;
 }
 
-function searchChoices(hits: ChatSearchHit[]): { choices: { label: string; value: ChatSearchHit }[]; header: string } {
-	const columns = chatColumns(hits, true);
-	return {
-		choices: hits.map((hit) => ({ label: `${chatLine(hit, columns)}\n       ⌕ ${String(hit.matchCount).padStart(3)}  ${hit.snippet}`, value: hit })),
-		header: chatHeader(columns),
-	};
+/** Two lines per hit: a colored chat line, then a match count and the highlighted snippet. */
+function renderSearchItem(hit: ChatSearchHit, columns: ChatColumns, term: string, index?: number): string {
+	const number = index === undefined ? "" : `${ansi.bold(ansi.cyan(String(index).padStart(3)))}  `;
+	const live = hit.alive === true ? ansi.green("●") : " ";
+	const harness = ansi.dim(HARNESS_LABELS[hit.harness].padEnd(11));
+	const id = ansi.dim(hit.sessionId.slice(0, 8));
+	const when = ansi.dim(whenLabel(hit.modifiedAt).padEnd(12));
+	const project = columns.project ? `${ansi.dim(fit(shortProject(hit.cwd), PROJECT_WIDTH))} ` : "";
+	const title = fit(chatTitle(hit), columns.title).trimEnd();
+	const line = `${number}${live} ${harness} ${id} ${when} ${project}${title}`;
+	const count = ansi.yellow(`${hit.matchCount}×`.padStart(5));
+	return `${line}\n       ${count}  ${highlight(hit.snippet, term)}`;
 }
 
-function printSearchHits(hits: ChatSearchHit[]): void {
-	if (hits.length === 0) { process.stdout.write("No chats mention that term.\n"); return; }
+function searchHeading(term: string, count: number): string {
+	return ansi.bold(`${count} ${count === 1 ? "chat" : "chats"} mention "${term}"`);
+}
+
+function printSearchHits(hits: ChatSearchHit[], term: string): void {
+	if (hits.length === 0) { process.stdout.write(`No chats mention "${term}".\n`); return; }
 	const columns = chatColumns(hits, false);
-	if (process.stdout.isTTY) process.stdout.write(`${chatHeader(columns)}\n`);
-	for (const hit of hits) process.stdout.write(`${chatLine(hit, columns)}\n       ⌕ ${String(hit.matchCount).padStart(3)}  ${hit.snippet}\n`);
+	if (process.stdout.isTTY) process.stdout.write(`${searchHeading(term, hits.length)}\n`);
+	for (const hit of hits) process.stdout.write(`${renderSearchItem(hit, columns, term)}\n`);
+}
+
+async function chooseHit(hits: ChatSearchHit[], term: string): Promise<ChatSearchHit | undefined> {
+	const columns = chatColumns(hits, true);
+	process.stdout.write(`${searchHeading(term, hits.length)}\n`);
+	for (const [offset, hit] of hits.entries()) process.stdout.write(`${renderSearchItem(hit, columns, term, offset + 1)}\n`);
+	const readline = createInterface({ input: process.stdin, output: process.stdout });
+	try {
+		while (true) {
+			const answer = (await readline.question(`\nOpen which chat? ${ansi.dim(`[1-${hits.length}, Enter to cancel]`)} `)).trim();
+			if (answer === "" || answer.toLowerCase() === "q") return undefined;
+			const selected = Number.parseInt(answer, 10);
+			if (Number.isSafeInteger(selected) && selected >= 1 && selected <= hits.length) return hits[selected - 1] as ChatSearchHit;
+			process.stderr.write("Enter a listed number, or press Enter to cancel.\n");
+		}
+	} finally { readline.close(); }
 }
 
 async function runSearch(options: Options): Promise<number> {
 	if (options.query === undefined || options.query === "") throw new Error('search needs a term, for example: harnext search "auth bug"');
-	let hits = await searchAllChats(options.query);
+	const progress = startSearchProgress(options.query);
+	let hits = await searchAllChats(options.query, progress.update);
 	if (options.alive) hits = (await markAlive(hits)).filter((hit): hit is ChatSearchHit => hit.alive === true);
-	if (hits.length === 0) { printSearchHits(hits); return 0; }
+	progress.finish(hits.length);
+	if (hits.length === 0) { process.stdout.write(`No chats mention "${options.query}".\n`); return 0; }
 	if (options.session !== undefined) {
 		const absolute = options.session.includes("/") ? resolve(options.session) : undefined;
 		const matches = hits.filter((hit) => absolute === undefined ? hit.sessionId.startsWith(options.session as string) : resolve(hit.path) === absolute);
@@ -650,9 +724,9 @@ async function runSearch(options: Options): Promise<number> {
 		if (matches.length > 1) throw new Error(`Chat id ${options.session} is ambiguous across ${matches.length} chats`);
 		return openChat(matches[0] as ChatSearchHit, options.dryRun);
 	}
-	if (!process.stdin.isTTY) { printSearchHits(hits); return 0; }
-	const listed = searchChoices(hits);
-	const chat = await choose(`Open chat matching "${options.query}"`, listed.choices, listed.header);
+	if (!process.stdin.isTTY) { printSearchHits(hits, options.query); return 0; }
+	const chat = await chooseHit(hits, options.query);
+	if (chat === undefined) { process.stdout.write("Cancelled.\n"); return 0; }
 	return openChat(chat, options.dryRun);
 }
 
