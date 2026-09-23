@@ -1,6 +1,6 @@
 {
   "name": "@buildingthefuture/harnext",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "Choose, transfer, and sync chats across Claude Code, pi, Oh My Pi, and Codex.",
   "license": "MIT",
   "repository": {
