@@ -22,6 +22,18 @@ release yet.
 
 ![harnext HTML prompt-history export](https://raw.githubusercontent.com/AbhinavMir/harnext/main/docs/screenshots/prompt-export.png)
 
+## List running agents
+
+```
+harnext ls
+```
+
+`ls` shows the agents that are running right now, grouped by harness. Each row
+reports the chat id, project, token usage, and whether a Claude Code
+remote-control connection is open on that chat. Token usage comes from each
+harness's own records; a harness that does not record it shows `—`. Remote
+control is experimental and currently reads Claude Code's IDE connections.
+
 ## Open any chat
 
 ```

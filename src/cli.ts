@@ -26,6 +26,7 @@ import {
 	type HarnessId,
 } from "./harnesses.js";
 import { harnessAdapter } from "./adapters/index.js";
+import { listActiveAgents } from "./agents.js";
 import { runGoalLoop, type GoalRoundEvent } from "./goal.js";
 import { execFile } from "node:child_process";
 import { postToHypertext, type HypertextExpiry } from "./hypertext.js";
@@ -51,7 +52,7 @@ import { openCommandInNewTerminal } from "./terminal.js";
 import { DEFAULT_MAX_TOOL_OUTPUT_CHARS, toPiEntries, writeToPi } from "./writers/pi.js";
 
 type Direction = "claude-to-pi" | "pi-to-claude";
-type Operation = "browse" | "chats" | "all" | "search" | "sync" | "watchdog" | "transfer" | "export" | "config" | "goal";
+type Operation = "browse" | "chats" | "all" | "search" | "ls" | "sync" | "watchdog" | "transfer" | "export" | "config" | "goal";
 type ExportSource = HarnessId;
 
 interface Options {
@@ -99,6 +100,7 @@ Usage:
   harnext chats [alive]              Choose any chat on this system and open it in a new terminal
   harnext all [alive]                List every chat, optionally only confirmed live chats
   harnext search "<term>" [alive]    Find every chat that mentions the term, then open one
+  harnext ls                         List running agents by harness with token use and RC status
   harnext sync [options]             Copy the current chat into every installed harness
   harnext watchdog [options]         Keep one sync group current until stopped or conflicted
   harnext config                     Configure the receiving-agent switch notice
@@ -189,6 +191,9 @@ function parseArgs(argv: string[]): Options {
 		start = 1;
 		if (argv[1] !== undefined && !argv[1].startsWith("-")) { options.query = argv[1]; start = 2; }
 		if (argv[start] === "alive") { options.alive = true; start += 1; }
+	} else if (command === "ls") {
+		options.operation = "ls";
+		start = 1;
 	} else if (command === "sync") {
 		options.operation = "sync";
 		start = 1;
@@ -730,6 +735,52 @@ async function runSearch(options: Options): Promise<number> {
 	return openChat(chat, options.dryRun);
 }
 
+function startSpinner(label: string): { stop: (summary: string) => void } {
+	if (process.stderr.isTTY !== true || process.env.NO_COLOR !== undefined) {
+		process.stderr.write(`${label}...\n`);
+		return { stop: () => {} };
+	}
+	const frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+	let frame = 0;
+	const timer = setInterval(() => {
+		frame = (frame + 1) % frames.length;
+		process.stderr.write(`\r\x1b[2K${ansi.cyan(frames[frame] as string)} ${label}...`);
+	}, 80);
+	return { stop: (summary) => { clearInterval(timer); process.stderr.write(`\r\x1b[2K${ansi.green("✓")} ${summary}\n`); } };
+}
+
+function humanTokens(tokens?: number): string {
+	if (tokens === undefined) return "—";
+	if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(1)}M`;
+	if (tokens >= 1_000) return `${(tokens / 1_000).toFixed(1)}k`;
+	return String(tokens);
+}
+
+async function runLs(): Promise<number> {
+	const spinner = startSpinner("checking active agents");
+	const agents = await listActiveAgents();
+	spinner.stop(`${agents.length} running ${agents.length === 1 ? "agent" : "agents"}`);
+	if (agents.length === 0) { process.stdout.write("No running agents found.\n"); return 0; }
+	process.stdout.write(`${ansi.dim("rc = Claude remote-control, experimental; — = not reported by this harness")}\n`);
+	const projectWidth = Math.min(PROJECT_WIDTH, Math.max(7, ...agents.map((agent) => shortProject(agent.cwd).length)));
+	const titleWidth = Math.max(16, (process.stdout.columns ?? 100) - (projectWidth + 30));
+	for (const harness of HARNESSES) {
+		const group = agents.filter((agent) => agent.harness === harness);
+		if (group.length === 0) continue;
+		process.stdout.write(`\n${ansi.bold(HARNESS_LABELS[harness])} ${ansi.dim(`(${group.length})`)}\n`);
+		for (const agent of group) {
+			const id = ansi.dim(agent.sessionId.slice(0, 8));
+			const project = ansi.dim(fit(shortProject(agent.cwd), projectWidth));
+			const rcText = agent.rc === undefined ? "—" : agent.rc ? "on" : "off";
+			const rc = (agent.rc === true ? ansi.green : ansi.dim)(rcText.padEnd(3));
+			const tokens = ansi.yellow(humanTokens(agent.tokens).padStart(7));
+			const title = fit(chatTitle(agent), titleWidth).trimEnd();
+			process.stdout.write(`  ${ansi.green("●")} ${id}  ${project} ${ansi.dim("rc")} ${rc} ${tokens}  ${title}\n`);
+		}
+	}
+	return 0;
+}
+
 function watchdogMessage(event: WatchdogEvent): void {
 	if (event.type === "synced") process.stdout.write(`${new Date().toISOString()}  ${HARNESS_LABELS[event.source?.harness as HarnessId]} -> ${event.targets?.map((target) => HARNESS_LABELS[target.harness]).join(", ")}\n`);
 	if (event.type === "waiting") process.stdout.write(`${new Date().toISOString()}  waiting: ${event.targets?.map((target) => HARNESS_LABELS[target.harness]).join(", ")} is open\n`);
@@ -820,6 +871,7 @@ async function run(argv: string[]): Promise<number> {
 	if (options.operation === "chats") return runChats(options);
 	if (options.operation === "all") return runAllChats(options);
 	if (options.operation === "search") return runSearch(options);
+	if (options.operation === "ls") return runLs();
 	if (options.operation === "sync") return runSyncCommand(options, false);
 	if (options.operation === "watchdog") return runSyncCommand(options, true);
 	if (options.operation === "config") return runConfig(options);
