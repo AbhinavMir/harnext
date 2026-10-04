@@ -8,17 +8,17 @@
  * "—" rather than inventing a value.
  */
 
-import { readFile, readdir } from "node:fs/promises";
+import { readFile, readdir, stat } from "node:fs/promises";
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { findAllChats, type ChatInfo, type HarnessId } from "./harnesses.js";
 import { markAlive } from "./alive.js";
 
 export interface ActiveAgent extends ChatInfo {
 	/** Cumulative tokens the harness recorded for this chat, when it records any. */
 	tokens?: number;
-	/** Claude Code remote-control (IDE) connection open on this chat's cwd; undefined where the concept does not apply. */
-	rc?: boolean;
+	/** Remote connection open for this chat; undefined where the harness has no remote concept. */
+	remote?: boolean;
 }
 
 /** Sum the distinct tokens a transcript records; cache re-reads are excluded so turns are not double counted. */
@@ -54,28 +54,36 @@ async function tokenUsage(harness: HarnessId, path: string): Promise<number | un
 	try { return parseTokenUsage(harness, await readFile(path, "utf8")); } catch { return undefined; }
 }
 
-/** Working directories with an open Claude Code remote-control (IDE) lock. */
-export async function remoteControlCwds(): Promise<Set<string>> {
-	const directory = join(homedir(), ".claude", "ide");
-	const cwds = new Set<string>();
+/** Claude Code session ids that have a remote bridge open, read from the daemon's session registry. */
+export async function claudeRemoteSessionIds(directory = join(homedir(), ".claude", "sessions")): Promise<Set<string>> {
+	const ids = new Set<string>();
 	let names: string[];
-	try { names = await readdir(directory); } catch { return cwds; }
-	await Promise.all(names.filter((name) => name.endsWith(".lock")).map(async (name) => {
+	try { names = await readdir(directory); } catch { return ids; }
+	await Promise.all(names.filter((name) => name.endsWith(".json")).map(async (name) => {
 		try {
-			const lock = JSON.parse(await readFile(join(directory, name), "utf8")) as { workspaceFolders?: unknown };
-			if (Array.isArray(lock.workspaceFolders)) for (const folder of lock.workspaceFolders) if (typeof folder === "string") cwds.add(resolve(folder));
-		} catch { /* skip unreadable lock */ }
+			const entry = JSON.parse(await readFile(join(directory, name), "utf8")) as { sessionId?: unknown; bridgeSessionId?: unknown };
+			if (typeof entry.sessionId === "string" && typeof entry.bridgeSessionId === "string" && entry.bridgeSessionId !== "") ids.add(entry.sessionId);
+		} catch { /* skip unreadable entry */ }
 	}));
-	return cwds;
+	return ids;
 }
 
-/** Every running chat on the system, with token usage and Claude remote-control status attached. */
+/** Whether pi's remote mesh broker is running on this machine. */
+export async function piRemoteActive(): Promise<boolean> {
+	for (const base of [join(homedir(), ".pi", "remote"), join(homedir(), ".config", "pi", "remote")]) {
+		try { await stat(join(base, "sessions", "local", "broker.sock")); return true; } catch { /* try next */ }
+	}
+	return false;
+}
+
+/** Every running chat on the system, with token usage and remote status attached. */
 export async function listActiveAgents(): Promise<ActiveAgent[]> {
 	const alive = (await markAlive(await findAllChats())).filter((chat) => chat.alive === true);
-	const rcCwds = await remoteControlCwds();
+	const [remoteClaude, remotePi] = await Promise.all([claudeRemoteSessionIds(), piRemoteActive()]);
 	return Promise.all(alive.map(async (chat) => ({
 		...chat,
 		tokens: await tokenUsage(chat.harness, chat.path),
-		...(chat.harness === "claude" ? { rc: rcCwds.has(resolve(chat.cwd)) } : {}),
+		...(chat.harness === "claude" ? { remote: remoteClaude.has(chat.sessionId) } : {}),
+		...(chat.harness === "pi" ? { remote: remotePi } : {}),
 	})));
 }

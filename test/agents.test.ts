@@ -26,3 +26,21 @@ describe("parseTokenUsage", () => {
 		expect(parseTokenUsage("claude", '{"type":"user"}')).toBeUndefined();
 	});
 });
+
+import { mkdtemp, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { claudeRemoteSessionIds } from "../src/agents.js";
+
+describe("claudeRemoteSessionIds", () => {
+	it("reports a session remote only when it has a non-null bridgeSessionId", async () => {
+		const dir = await mkdtemp(join(tmpdir(), "harnext-sessions-"));
+		await writeFile(join(dir, "1.json"), JSON.stringify({ sessionId: "remote-one", bridgeSessionId: "session_abc" }));
+		await writeFile(join(dir, "2.json"), JSON.stringify({ sessionId: "local-one", bridgeSessionId: null }));
+		await writeFile(join(dir, "3.json"), JSON.stringify({ sessionId: "empty-bridge", bridgeSessionId: "" }));
+		const ids = await claudeRemoteSessionIds(dir);
+		expect(ids.has("remote-one")).toBe(true);
+		expect(ids.has("local-one")).toBe(false);
+		expect(ids.has("empty-bridge")).toBe(false);
+	});
+});

@@ -761,9 +761,9 @@ async function runLs(): Promise<number> {
 	const agents = await listActiveAgents();
 	spinner.stop(`${agents.length} running ${agents.length === 1 ? "agent" : "agents"}`);
 	if (agents.length === 0) { process.stdout.write("No running agents found.\n"); return 0; }
-	process.stdout.write(`${ansi.dim("rc = Claude remote-control, experimental; — = not reported by this harness")}\n`);
+	process.stdout.write(`${ansi.dim("remote = a remote connection is open; — = this harness has no remote")}\n`);
 	const projectWidth = Math.min(PROJECT_WIDTH, Math.max(7, ...agents.map((agent) => shortProject(agent.cwd).length)));
-	const titleWidth = Math.max(16, (process.stdout.columns ?? 100) - (projectWidth + 30));
+	const titleWidth = Math.max(16, (process.stdout.columns ?? 100) - (projectWidth + 34));
 	for (const harness of HARNESSES) {
 		const group = agents.filter((agent) => agent.harness === harness);
 		if (group.length === 0) continue;
@@ -771,11 +771,11 @@ async function runLs(): Promise<number> {
 		for (const agent of group) {
 			const id = ansi.dim(agent.sessionId.slice(0, 8));
 			const project = ansi.dim(fit(shortProject(agent.cwd), projectWidth));
-			const rcText = agent.rc === undefined ? "—" : agent.rc ? "on" : "off";
-			const rc = (agent.rc === true ? ansi.green : ansi.dim)(rcText.padEnd(3));
+			const remoteText = agent.remote === undefined ? "—" : agent.remote ? "remote on" : "remote off";
+			const remote = (agent.remote === true ? ansi.green : ansi.dim)(remoteText.padEnd(10));
 			const tokens = ansi.yellow(humanTokens(agent.tokens).padStart(7));
 			const title = fit(chatTitle(agent), titleWidth).trimEnd();
-			process.stdout.write(`  ${ansi.green("●")} ${id}  ${project} ${ansi.dim("rc")} ${rc} ${tokens}  ${title}\n`);
+			process.stdout.write(`  ${ansi.green("●")} ${id}  ${project} ${remote} ${tokens}  ${title}\n`);
 		}
 	}
 	return 0;

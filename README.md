@@ -29,10 +29,11 @@ harnext ls
 ```
 
 `ls` shows the agents that are running right now, grouped by harness. Each row
-reports the chat id, project, token usage, and whether a Claude Code
-remote-control connection is open on that chat. Token usage comes from each
-harness's own records; a harness that does not record it shows `—`. Remote
-control is experimental and currently reads Claude Code's IDE connections.
+reports the chat id, project, token usage, and whether a remote connection is
+open. Claude Code remote is read per session from the daemon's session
+registry; pi remote reflects whether its remote mesh broker is running. Token
+usage comes from each harness's own records; a harness that reports neither
+shows `—`.
 
 ## Open any chat
 
