@@ -1,10 +1,20 @@
 # harnext
 
-Choose, transfer, and sync chats across Claude Code, pi, Oh My Pi, and Codex.
+harness + next == harnext. The next era of harnesses.
+
+Choose, transfer, sync, and search chats across Claude Code, pi, Oh My Pi, and Codex.
 
 ```
 npm i -g @buildingthefuture/harnext
 ```
+
+## Coming soon (experimental)
+
+Harnext is adding remote session health checks and a temperature monitor driven
+by the agents themselves. It constantly checks whether remote-control sessions
+(RCs) are still alive on each system, and when a monitor runs too hot it decides
+what to do about it. These features are experimental and are not part of this
+release yet.
 
 ## Demo
 

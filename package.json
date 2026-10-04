@@ -1,7 +1,7 @@
 {
   "name": "@buildingthefuture/harnext",
   "version": "0.6.1",
-  "description": "Choose, transfer, and sync chats across Claude Code, pi, Oh My Pi, and Codex.",
+  "description": "harness + next == harnext — the next era of harnesses. Transfer, sync, and search agent chats across Claude Code, pi, Oh My Pi, and Codex.",
   "license": "MIT",
   "repository": {
     "type": "git",
