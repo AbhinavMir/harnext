@@ -1,6 +1,6 @@
 {
   "name": "@buildingthefuture/harnext",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "description": "harness + next == harnext — the next era of harnesses. Transfer, sync, and search agent chats across Claude Code, pi, Oh My Pi, and Codex.",
   "license": "MIT",
   "repository": {
