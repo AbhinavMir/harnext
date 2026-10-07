@@ -28,7 +28,7 @@ import {
 import { harnessAdapter } from "./adapters/index.js";
 import { listActiveAgents } from "./agents.js";
 import { runGoalLoop, type GoalRoundEvent } from "./goal.js";
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { postToHypertext, type HypertextExpiry } from "./hypertext.js";
 import type { Transcript } from "./ir.js";
 import {
@@ -674,45 +674,92 @@ async function openChat(chat: ChatInfo, dryRun: boolean): Promise<number> {
 	return 0;
 }
 
-/** Two lines per hit: a colored chat line, then a match count and the highlighted snippet. */
-function renderSearchItem(hit: ChatSearchHit, columns: ChatColumns, term: string, index?: number): string {
-	const number = index === undefined ? "" : `${ansi.bold(ansi.cyan(String(index).padStart(3)))}  `;
-	const live = hit.alive === true ? ansi.green("●") : " ";
-	const harness = ansi.dim(HARNESS_LABELS[hit.harness].padEnd(11));
-	const id = ansi.dim(hit.sessionId.slice(0, 8));
-	const when = ansi.dim(whenLabel(hit.modifiedAt).padEnd(12));
-	const project = columns.project ? `${ansi.dim(fit(shortProject(hit.cwd), PROJECT_WIDTH))} ` : "";
-	const title = fit(chatTitle(hit), columns.title).trimEnd();
-	const line = `${number}${live} ${harness} ${id} ${when} ${project}${title}`;
-	const count = ansi.yellow(`${hit.matchCount}×`.padStart(5));
-	return `${line}\n       ${count}  ${highlight(hit.snippet, term)}`;
-}
-
 function searchHeading(term: string, count: number): string {
 	return ansi.bold(`${count} ${count === 1 ? "chat" : "chats"} mention "${term}"`);
 }
 
-function printSearchHits(hits: ChatSearchHit[], term: string): void {
-	if (hits.length === 0) { process.stdout.write(`No chats mention "${term}".\n`); return; }
-	const columns = chatColumns(hits, false);
+/** Hits grouped by harness in registry order, empty groups dropped. */
+function hitsByHarness(hits: ChatSearchHit[]): { harness: HarnessId; hits: ChatSearchHit[] }[] {
+	return HARNESSES
+		.map((harness) => ({ harness, hits: hits.filter((hit) => hit.harness === harness) }))
+		.filter((group) => group.hits.length > 0);
+}
+
+function searchColumns(hits: ChatSearchHit[]): { projectWidth: number; titleWidth: number } {
+	const projectWidth = Math.min(PROJECT_WIDTH, Math.max(7, ...hits.map((hit) => shortProject(hit.cwd).length)));
+	const titleWidth = Math.max(16, (process.stdout.columns ?? 100) - (projectWidth + 26));
+	return { projectWidth, titleWidth };
+}
+
+/** One line per hit, same shape as `harnext ls`: a match count and the title where the term is highlighted. */
+function searchRow(hit: ChatSearchHit, term: string, projectWidth: number, titleWidth: number, index?: number): string {
+	const number = index === undefined ? "   " : ansi.bold(ansi.cyan(String(index).padStart(3)));
+	const id = ansi.dim(hit.sessionId.slice(0, 8));
+	const project = ansi.dim(fit(shortProject(hit.cwd), projectWidth));
+	const count = ansi.yellow(`${hit.matchCount}×`.padStart(6));
+	const title = highlight(fit(chatTitle(hit), titleWidth).trimEnd(), term);
+	return `${number} ${ansi.green("●")} ${id}  ${project} ${count}  ${title}`;
+}
+
+/** Print the grouped result list; returns the hits in listed order so a number maps back to a hit. */
+function printSearchHits(hits: ChatSearchHit[], term: string, numbered: boolean): ChatSearchHit[] {
+	const { projectWidth, titleWidth } = searchColumns(hits);
 	if (process.stdout.isTTY) process.stdout.write(`${searchHeading(term, hits.length)}\n`);
-	for (const hit of hits) process.stdout.write(`${renderSearchItem(hit, columns, term)}\n`);
+	const ordered: ChatSearchHit[] = [];
+	for (const group of hitsByHarness(hits)) {
+		process.stdout.write(`\n${ansi.bold(HARNESS_LABELS[group.harness])} ${ansi.dim(`(${group.hits.length})`)}\n`);
+		for (const hit of group.hits) {
+			ordered.push(hit);
+			process.stdout.write(`${searchRow(hit, term, projectWidth, titleWidth, numbered ? ordered.length : undefined)}\n`);
+		}
+	}
+	return ordered;
 }
 
 async function chooseHit(hits: ChatSearchHit[], term: string): Promise<ChatSearchHit | undefined> {
-	const columns = chatColumns(hits, true);
-	process.stdout.write(`${searchHeading(term, hits.length)}\n`);
-	for (const [offset, hit] of hits.entries()) process.stdout.write(`${renderSearchItem(hit, columns, term, offset + 1)}\n`);
+	const ordered = printSearchHits(hits, term, true);
 	const readline = createInterface({ input: process.stdin, output: process.stdout });
 	try {
 		while (true) {
-			const answer = (await readline.question(`\nOpen which chat? ${ansi.dim(`[1-${hits.length}, Enter to cancel]`)} `)).trim();
+			const answer = (await readline.question(`\nWhich chat? ${ansi.dim(`[1-${ordered.length}, Enter to cancel]`)} `)).trim();
 			if (answer === "" || answer.toLowerCase() === "q") return undefined;
 			const selected = Number.parseInt(answer, 10);
-			if (Number.isSafeInteger(selected) && selected >= 1 && selected <= hits.length) return hits[selected - 1] as ChatSearchHit;
+			if (Number.isSafeInteger(selected) && selected >= 1 && selected <= ordered.length) return ordered[selected - 1] as ChatSearchHit;
 			process.stderr.write("Enter a listed number, or press Enter to cancel.\n");
 		}
 	} finally { readline.close(); }
+}
+
+/** Copy text to the OS clipboard, returning whether a clipboard tool accepted it. */
+async function copyToClipboard(text: string): Promise<boolean> {
+	const tools: [string, string[]][] = process.platform === "darwin"
+		? [["pbcopy", []]]
+		: process.platform === "win32"
+			? [["clip", []]]
+			: [["wl-copy", []], ["xclip", ["-selection", "clipboard"]], ["xsel", ["--clipboard", "--input"]]];
+	for (const [command, args] of tools) {
+		try {
+			await new Promise<void>((resolve, reject) => {
+				const child = spawn(command, args, { stdio: ["pipe", "ignore", "ignore"] });
+				child.once("error", reject);
+				child.once("close", (code) => code === 0 ? resolve() : reject(new Error(`exit ${String(code)}`)));
+				child.stdin.end(text);
+			});
+			return true;
+		} catch { /* try the next tool */ }
+	}
+	return false;
+}
+
+/** Show the resume command for a chat and copy it to the clipboard, instead of launching a terminal. */
+async function presentResume(chat: ChatInfo): Promise<number> {
+	const command = resumeCommandFor(chat.harness, chat.sessionId, chat.cwd);
+	const copied = await copyToClipboard(command);
+	process.stdout.write(`\n${ansi.bold(`Resume this ${HARNESS_LABELS[chat.harness]} chat:`)}\n  ${command}\n`);
+	process.stdout.write(copied
+		? `${ansi.dim("Copied to your clipboard. Paste it in a new terminal tab to resume.")}\n`
+		: `${ansi.dim("Copy the command above and run it in a new terminal tab.")}\n`);
+	return 0;
 }
 
 async function runSearch(options: Options): Promise<number> {
@@ -727,12 +774,12 @@ async function runSearch(options: Options): Promise<number> {
 		const matches = hits.filter((hit) => absolute === undefined ? hit.sessionId.startsWith(options.session as string) : resolve(hit.path) === absolute);
 		if (matches.length === 0) throw new Error(`No matching chat has id ${options.session}`);
 		if (matches.length > 1) throw new Error(`Chat id ${options.session} is ambiguous across ${matches.length} chats`);
-		return openChat(matches[0] as ChatSearchHit, options.dryRun);
+		return presentResume(matches[0] as ChatSearchHit);
 	}
-	if (!process.stdin.isTTY) { printSearchHits(hits, options.query); return 0; }
+	if (!process.stdin.isTTY) { printSearchHits(hits, options.query, false); return 0; }
 	const chat = await chooseHit(hits, options.query);
 	if (chat === undefined) { process.stdout.write("Cancelled.\n"); return 0; }
-	return openChat(chat, options.dryRun);
+	return presentResume(chat);
 }
 
 function startSpinner(label: string): { stop: (summary: string) => void } {

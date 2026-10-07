@@ -35,6 +35,19 @@ registry; pi remote reflects whether its remote mesh broker is running. Token
 usage comes from each harness's own records; a harness that reports neither
 shows `—`.
 
+## Search chats
+
+```
+harnext search "<term>"
+```
+
+`search` scans every chat in every harness for the term and lists the matches
+grouped by harness, most matches first, one line each with a match count. Pick
+a result and harnext prints the resume command and copies it to your clipboard,
+so you paste it into whichever terminal you use rather than having a new window
+open in the wrong one. Add `alive` to limit the search to running chats, or
+`--session <id>` to resolve one match directly. In a pipe it prints the list.
+
 ## Open any chat
 
 ```
