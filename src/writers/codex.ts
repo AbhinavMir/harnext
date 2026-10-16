@@ -1,7 +1,7 @@
 /** Writer for resumable Codex rollout sessions. */
 
 import { spawn } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { writeTextFile } from "../atomic.js";
@@ -33,6 +33,14 @@ export interface CodexWriteResult {
 
 function iso(value: number): string {
 	return new Date(Number.isFinite(value) ? value : Date.now()).toISOString();
+}
+
+// OpenAI rejects a function call_id over 64 characters, and a transferred tool
+// id can be a composite like "call_x|fc_y" (83 chars). Map any id that is too
+// long or has unexpected characters to a short deterministic one, keeping the
+// call and its output in sync.
+function codexCallId(id: string): string {
+	return id.length <= 64 && /^[A-Za-z0-9_-]+$/.test(id) ? id : `call_${createHash("sha256").update(id).digest("hex").slice(0, 32)}`;
 }
 
 function record(timestamp: number, type: string, payload: Record<string, unknown>): Record<string, unknown> {
@@ -80,13 +88,14 @@ export function toCodexRecords(transcript: Transcript, options: CodexWriteOption
 				continue;
 			}
 			if (block.kind !== "toolCall") continue;
-			records.push(record(message.ts, "response_item", { type: "function_call", name: block.name, arguments: JSON.stringify(block.arguments), call_id: block.id }));
+			const callId = codexCallId(block.id);
+			records.push(record(message.ts, "response_item", { type: "function_call", name: block.name, arguments: JSON.stringify(block.arguments), call_id: callId }));
 			stats.toolCalls += 1;
 			const result = results.get(block.id);
 			if (result !== undefined) {
 				consumed.add(block.id);
 				const output = result.blocks.map((item) => item.kind === "image" ? `[image ${item.mimeType}]` : item.text).join("\n");
-				records.push(record(result.ts, "response_item", { type: "function_call_output", call_id: block.id, output }));
+				records.push(record(result.ts, "response_item", { type: "function_call_output", call_id: callId, output }));
 			}
 		}
 	}
@@ -112,7 +121,12 @@ export async function writeToCodex(transcript: Transcript, options: CodexWriteOp
 	const path = options.path ?? join(options.codexRoot ?? defaultCodexRoot(), "sessions", ...datePath, `rollout-${stamp}-${built.sessionId}.jsonl`);
 	await mkdir(dirname(path), { recursive: true });
 	await writeTextFile(path, `${built.records.map((item) => JSON.stringify(item)).join("\n")}\n`, options.overwrite === true);
-	const shouldMigrate = options.migrate ?? options.overwrite !== true;
+	// Modern Codex resumes a rollout by id straight from the JSONL file, so the
+	// dropped-in session needs no registration. Its `migrate-rollouts` command
+	// only paginates threads that already exist in Codex's SQLite catalog and
+	// fails with "missing_sqlite_metadata" on a foreign file, so migration is
+	// off by default and kept only as an opt-in for old Codex builds.
+	const shouldMigrate = options.migrate ?? false;
 	if (shouldMigrate) await runMigration(options.codexCommand ?? "codex", built.sessionId);
 	return { path, sessionId: built.sessionId, stats: built.stats, migrated: shouldMigrate };
 }

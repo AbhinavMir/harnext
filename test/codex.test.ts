@@ -44,3 +44,36 @@ describe("Codex rollouts", () => {
 		expect(parsed.notes).toContainEqual(expect.objectContaining({ code: "user.harness-injection-removed" }));
 	});
 });
+
+describe("toCodexRecords call ids", () => {
+	it("shortens an over-long composite tool id and keeps call and output in sync", () => {
+		const original = "call_8igRONyIRu3uydBzdtqbxbl2|fc_076b744557c3ba08016a9bc036689887d2be225e0dad5bcb1b";
+		const { records } = toCodexRecords({
+			source: "pi",
+			sessionId: "source",
+			cwd: "/tmp/codex-project",
+			createdAt: 1_700_000_000_000,
+			messages: [
+				{ role: "assistant", ts: 1, blocks: [{ kind: "toolCall", id: original, name: "read", arguments: { path: "a.ts" } }] },
+				{ role: "toolResult", ts: 2, callId: original, name: "read", isError: false, blocks: [{ kind: "text", text: "body" }] },
+			],
+			notes: [],
+		});
+		const call = records.find((r) => (r.payload as { type?: string }).type === "function_call") as { payload: { call_id: string } };
+		const output = records.find((r) => (r.payload as { type?: string }).type === "function_call_output") as { payload: { call_id: string } };
+		expect(call.payload.call_id.length).toBeLessThanOrEqual(64);
+		expect(call.payload.call_id).toMatch(/^[A-Za-z0-9_-]+$/);
+		expect(call.payload.call_id).not.toBe(original);
+		expect(output.payload.call_id).toBe(call.payload.call_id);
+	});
+
+	it("leaves a short, valid tool id unchanged", () => {
+		const { records } = toCodexRecords({
+			source: "pi", sessionId: "source", cwd: "/tmp/codex-project", createdAt: 1_700_000_000_000,
+			messages: [{ role: "assistant", ts: 1, blocks: [{ kind: "toolCall", id: "call_abc123", name: "read", arguments: {} }] }],
+			notes: [],
+		});
+		const call = records.find((r) => (r.payload as { type?: string }).type === "function_call") as { payload: { call_id: string } };
+		expect(call.payload.call_id).toBe("call_abc123");
+	});
+});

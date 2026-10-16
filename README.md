@@ -35,8 +35,8 @@ Requires Node 22.19 or later.
 | Oh My Pi | yes | yes | `omp --resume <id>` |
 | Codex CLI/App | yes | yes | `codex resume <id>` |
 
-Codex imports are written as rollout history and registered through Codex's own
-`migrate-rollouts`. Oh My Pi imports use its native v3 session format.
+Codex imports are written as rollout history that `codex resume <id>` loads
+directly. Oh My Pi imports use its native v3 session format.
 
 ## Demo
 
