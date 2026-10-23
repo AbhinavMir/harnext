@@ -104,3 +104,19 @@ describe("toCodexRecords model provider", () => {
 		expect(turn).toBeDefined();
 	});
 });
+
+describe("toCodexRecords assistant display", () => {
+	it("emits an agent_message event so the answer shows on resume", () => {
+		const { records } = toCodexRecords({
+			source: "claude", sessionId: "s", cwd: "/tmp/p", createdAt: 1_700_000_000_000,
+			model: { provider: "anthropic", id: "claude-fable-5-1" },
+			messages: [{ role: "assistant", ts: 1, blocks: [{ kind: "text", text: "the answer" }] }],
+			notes: [],
+		});
+		const event = records.find((r) => (r.payload as { type?: string }).type === "agent_message") as { payload: { message: string } };
+		expect(event).toBeDefined();
+		expect(event.payload.message).toBe("the answer");
+		const msg = records.find((r) => (r.payload as { role?: string }).role === "assistant") as { payload: { status: string } };
+		expect(msg.payload.status).toBe("completed");
+	});
+});

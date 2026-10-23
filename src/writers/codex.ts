@@ -83,7 +83,11 @@ export function toCodexRecords(transcript: Transcript, options: CodexWriteOption
 		}
 		const text = message.blocks.filter((block) => block.kind === "text").map((block) => block.kind === "text" ? block.text : "");
 		if (text.length > 0) {
-			records.push(record(message.ts, "response_item", { type: "message", role: "assistant", content: text.map((value) => ({ type: "output_text", text: value })) }));
+			// The response_item keeps the answer in model context; the agent_message
+			// event is what Codex replays into the visible transcript on resume, the
+			// same way the user turn above pairs a response_item with a user_message.
+			records.push(record(message.ts, "response_item", { type: "message", role: "assistant", status: "completed", content: text.map((value) => ({ type: "output_text", text: value })) }));
+			records.push(record(message.ts, "event_msg", { type: "agent_message", message: text.join("\n") }));
 			stats.messages += 1;
 		}
 		for (const block of message.blocks) {
