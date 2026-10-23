@@ -49,7 +49,11 @@ function record(timestamp: number, type: string, payload: Record<string, unknown
 
 export function toCodexRecords(transcript: Transcript, options: CodexWriteOptions = {}): { records: Record<string, unknown>[]; sessionId: string; stats: CodexWriteStats } {
 	const sessionId = options.sessionId ?? randomUUID();
-	const modelProvider = transcript.model?.provider ?? "openai";
+	// A resumed session runs inside Codex on its own provider. Recording the
+	// source provider (anthropic for a Claude chat) makes Codex fail config load
+	// with "Model provider not found", so always record Codex's own provider,
+	// and keep a model id only when the source is already Codex.
+	const nativeCodex = transcript.model?.provider === undefined || transcript.model.provider === "openai";
 	const records: Record<string, unknown>[] = [record(transcript.createdAt, "session_meta", {
 		id: sessionId,
 		session_id: sessionId,
@@ -58,9 +62,9 @@ export function toCodexRecords(transcript: Transcript, options: CodexWriteOption
 		originator: "harnext",
 		cli_version: "harnext",
 		source: "cli",
-		model_provider: modelProvider,
+		model_provider: "openai",
 	})];
-	if (transcript.model?.id !== undefined) records.push(record(transcript.createdAt, "turn_context", { model: transcript.model.id, cwd: transcript.cwd }));
+	if (nativeCodex && transcript.model?.id !== undefined) records.push(record(transcript.createdAt, "turn_context", { model: transcript.model.id, cwd: transcript.cwd }));
 	const results = new Map<string, IrToolResultMessage>();
 	for (const message of transcript.messages) if (message.role === "toolResult") results.set(message.callId, message);
 	const consumed = new Set<string>();

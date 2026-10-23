@@ -77,3 +77,30 @@ describe("toCodexRecords call ids", () => {
 		expect(call.payload.call_id).toBe("call_abc123");
 	});
 });
+
+describe("toCodexRecords model provider", () => {
+	const foreign: Transcript = {
+		source: "claude", sessionId: "s", cwd: "/tmp/p", createdAt: 1_700_000_000_000,
+		model: { provider: "anthropic", id: "claude-fable-5-1" },
+		messages: [{ role: "user", ts: 1, blocks: [{ kind: "text", text: "hi" }] }],
+		notes: [],
+	};
+
+	it("records Codex's own provider, never the source provider", () => {
+		const { records } = toCodexRecords(foreign);
+		const meta = records[0] as { payload: { model_provider: string } };
+		expect(meta.payload.model_provider).toBe("openai");
+	});
+
+	it("omits a foreign model id from turn_context", () => {
+		const { records } = toCodexRecords(foreign);
+		const turn = records.find((r) => (r.payload as { type?: string }).type === undefined && "model" in (r.payload as object));
+		expect(turn).toBeUndefined();
+	});
+
+	it("keeps the model in turn_context for a native Codex source", () => {
+		const { records } = toCodexRecords({ ...foreign, model: { provider: "openai", id: "gpt-5" } });
+		const turn = records.find((r) => (r.payload as { model?: string }).model === "gpt-5");
+		expect(turn).toBeDefined();
+	});
+});
